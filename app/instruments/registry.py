@@ -33,7 +33,7 @@ class AdaptiveMusicalClock(ABC):
 class VirtualPlayerRegistry:
     """Repositório e orquestrador de todos os músicos virtuais da banda."""
 
-    def __init__(self, sample_rate: int = 44100):
+    def __init__(self, sample_rate: int = 44100, bass_player: Optional[BassPlayer] = None):
         self._sample_rate = sample_rate
         self._players: Dict[str, VirtualInstrument] = {}
         self._player_statuses: Dict[str, str] = {
@@ -44,7 +44,7 @@ class VirtualPlayerRegistry:
         }
 
         # Inicializa e cadastra o BassPlayer existente
-        self._bass_player = BassPlayer(sample_rate=sample_rate)
+        self._bass_player = bass_player if bass_player is not None else BassPlayer(sample_rate=sample_rate)
         self.register_player("bass", self._bass_player)
 
     def register_player(self, slot: str, player: VirtualInstrument) -> None:

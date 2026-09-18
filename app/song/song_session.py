@@ -7,11 +7,12 @@ Garante isolamento hermético entre trocas de músicas para evitar memory leaks.
 
 from typing import Optional, Dict, Any, List
 import copy
+from dataclasses import fields
 
 from app.song.song import Song
 from app.music.musical_context import MusicalContext
 from app.music.musical_clock import MusicalClock
-from app.music.chord_chart import ChordChart, ChartSection, ChartChord
+from app.music.chord_chart import ChordChart, ChartSection, ChartChord, parse_chord
 from app.input.chart_parser import ChartParser
 from app.music.chart_alignment import ChartAlignment, ChartPosition
 from app.music.chart_audio_fusion import ChartAudioFusion, FusedMusicalState
@@ -74,7 +75,7 @@ class SongSession:
 
         # 5. Motores de Estrutura e Predição isolados
         self._structure_analyzer: MusicStructureAnalyzer = MusicStructureAnalyzer()
-        self._prediction_engine: PredictionEngine = PredictionEngine()
+        self._prediction_engine: PredictionEngine = self._structure_analyzer.prediction_engine
 
         # 6. Estimador Contínuo de Posição Musical (v0.4)
         self._position_estimator: PositionEstimator = PositionEstimator(
@@ -94,7 +95,7 @@ class SongSession:
             pass # Pode ser deserializado no futuro
 
         # 7. Estado Instantâneo Consolidado
-        self._current_chart_pos: ChartPosition = self._alignment.get_position_at(1, 1.0)
+        self._current_chart_pos: ChartPosition = self._position_estimator.refresh_position()
         self._current_fused_state: FusedMusicalState = FusedMusicalState(
             expected_chord=self._current_chart_pos.current_chord,
             effective_chord=self._current_chart_pos.current_chord,
@@ -102,7 +103,7 @@ class SongSession:
             current_section=self._current_chart_pos.section_name,
             next_section=self._current_chart_pos.next_section_name
         )
-        self._latest_prediction: Optional[MusicPrediction] = None
+        self._publish_position(update_structure=False)
         self._player_states: Dict[str, Any] = {
             "bass": "READY",
             "drums": "READY",
@@ -159,10 +160,20 @@ class SongSession:
 
     @property
     def current_bar(self) -> int:
-        return self._clock.bar
+        """Compasso musical oficial, após localização/reancoragem na cifra."""
+        return self._current_chart_pos.current_bar
 
     @property
     def current_beat(self) -> int:
+        return int(self._current_chart_pos.current_beat)
+
+    @property
+    def clock_bar(self) -> int:
+        """Compasso bruto calculado a partir do tempo do áudio."""
+        return self._clock.bar
+
+    @property
+    def clock_beat(self) -> int:
         return self._clock.beat
 
     @property
@@ -203,11 +214,11 @@ class SongSession:
 
     @property
     def tracking_state(self) -> str:
-        return self._position_estimator.tracking_state.value
+        return self._current_chart_pos.tracking_state
 
     @property
     def position_confidence(self) -> float:
-        return self._position_estimator.position_confidence
+        return self._current_chart_pos.confidence
 
     @property
     def current_line(self) -> int:
@@ -215,7 +226,7 @@ class SongSession:
 
     @property
     def prediction(self) -> Optional[MusicPrediction]:
-        return self._latest_prediction
+        return self._prediction_engine.latest_prediction
 
     @property
     def player_states(self) -> Dict[str, Any]:
@@ -250,7 +261,7 @@ class SongSession:
         self._fusion.reset()
         self._structure_analyzer.reset()
         self._position_estimator.reset()
-        self._current_chart_pos = self._alignment.get_position_at(1, 1.0)
+        self._current_chart_pos = self._position_estimator.refresh_position()
         self._current_fused_state = FusedMusicalState(
             expected_chord=self._current_chart_pos.current_chord,
             effective_chord=self._current_chart_pos.current_chord,
@@ -258,7 +269,7 @@ class SongSession:
             current_section=self._current_chart_pos.section_name,
             next_section=self._current_chart_pos.next_section_name
         )
-        self._latest_prediction = None
+        self._publish_position(update_structure=False)
 
     def close(self) -> None:
         """Libera integralmente todos os recursos e estados da sessão anterior."""
@@ -274,47 +285,94 @@ class SongSession:
         detected_chord: str = "--",
         detected_confidence: float = 0.0,
         detected_key: str = "--",
-        detected_bpm: float = 0.0
+        detected_bpm: float = 0.0,
+        source_context: Optional[MusicalContext] = None,
     ) -> FusedMusicalState:
-        """Processa a passagem de tempo contínua do áudio ou do metrônomo."""
-        # 1. Atualiza relógio
-        self._clock.update(timestamp, bpm=self._song.performance_settings.bpm_override or (detected_bpm if detected_bpm > 0 else self._clock.bpm))
-        
-        # 2. Estima posição continuamente com o PositionEstimator (multivariável)
+        """Tempo bruto → estimador → snapshot musical → todos os consumidores."""
+        self._clock.update(
+            timestamp, bpm=self._song.performance_settings.bpm_override or
+            (detected_bpm if detected_bpm > 0 else self._clock.bpm))
         self._current_chart_pos = self._position_estimator.update(
-            timestamp=timestamp,
-            detected_chord=detected_chord,
-            detected_confidence=detected_confidence,
-            detected_key=detected_key
-        )
+            timestamp=timestamp, detected_chord=detected_chord,
+            detected_confidence=detected_confidence, detected_key=detected_key)
+        return self._publish_position(detected_chord, detected_confidence, detected_key, source_context)
 
-        # 3. Executa fusão hierárquica Cifra x Áudio
-        self._current_fused_state = self._fusion.fuse(
-            chart_pos=self._current_chart_pos,
-            detected_chord=detected_chord,
-            chord_confidence=detected_confidence,
-            timestamp=timestamp
-        )
-
-
-        # 4. Atualiza o MusicalContext compartilhado
-        self._context.timestamp = timestamp
-        self._context.bpm = self._clock.bpm
-        self._context.meter = self._clock.meter
-        self._context.bar = self._clock.bar
-        self._context.beat = self._clock.beat
-        self._context.beat_position = self._clock.beat_position
-        self._context.is_beat = self._clock.is_beat
-        self._context.chord = self._current_fused_state.effective_chord
-        self._context.current_chord = self._context.chord
-        self._context.chord_confidence = self._current_fused_state.confidence
-        self._context.current_section = self._current_fused_state.current_section
-        self._context.predicted_next_section = self._current_fused_state.next_section
+    def _publish_position(self, detected_chord: str = "--", detected_confidence: float = 0.0,
+                          detected_key: str = "--", source_context: Optional[MusicalContext] = None,
+                          update_structure: bool = True) -> FusedMusicalState:
+        """Publica o mesmo snapshot na fusão, contexto, estrutura e predição."""
+        position = self._current_chart_pos
+        timestamp = position.absolute_time
+        previous = self._context.chord
+        previous_start = self._context.chord_start_time
+        previous_time = self._context.timestamp
+        if source_context is not None:
+            for item in fields(MusicalContext):
+                setattr(self._context, item.name, copy.deepcopy(getattr(source_context, item.name)))
+        state = self._fusion.fuse(position, detected_chord, detected_confidence, timestamp)
+        self._current_fused_state = state
+        ctx = self._context
+        ctx.timestamp = timestamp
+        ctx.bpm = self._clock.bpm
+        ctx.meter = self._clock.meter
+        ctx.bar = position.current_bar
+        ctx.beat = int(position.current_beat)
+        ctx.beat_position = position.current_beat - ctx.beat
+        ctx.is_beat = self._clock.is_beat
+        ctx.clock_bar = self.clock_bar
+        ctx.clock_beat = self.clock_beat
+        ctx.bar_offset = self._position_estimator.bar_offset
+        ctx.line_index = position.line_index
+        ctx.tracking_state = position.tracking_state
+        ctx.position_confidence = position.confidence
+        ctx.chord = state.effective_chord
+        ctx.chord_confidence = state.confidence
+        if previous != ctx.chord or timestamp < previous_time:
+            ctx.previous_chord = previous
+            ctx.chord_start_time = timestamp
+        else:
+            ctx.chord_start_time = previous_start
+        ctx.chord_duration = max(0.0, timestamp - ctx.chord_start_time)
+        if ctx.chord not in ("", "--", "UNKNOWN", "N"):
+            symbol = parse_chord(ctx.chord, self._chart.key)
+            ctx.chord_root = symbol.root
+            ctx.chord_quality = symbol.quality
+            ctx.bass_note = symbol.bass_note or symbol.root
+            ctx.inversion = "slash" if symbol.bass_note and symbol.bass_note != symbol.root else "root"
+        ctx.current_section = state.current_section
+        ctx.section_progress = position.section_progress
+        ctx.structure_confidence = position.confidence
+        ctx.predicted_next_section = state.next_section
         if detected_key and detected_key != "--":
-            self._context.key = detected_key
-            self._context.current_key = detected_key
+            ctx.key = detected_key
+        if update_structure:
+            # Históricos DSP permanecem no AudioAnalyzer; estrutura aprende do contexto efetivo.
+            self._structure_analyzer.update_online(
+                ctx, None, None, self._clock,
+                chart_position=position if self._chart.sections else None)
+        ctx.sync_aliases()
+        return state
 
-        return self._current_fused_state
+    def get_position_diagnostics(self) -> Dict[str, Any]:
+        """Diagnóstico derivado; não mantém outra posição independente."""
+        return {
+            "clock_bar": self.clock_bar, "clock_beat": self.clock_beat,
+            "current_bar": self.current_bar, "current_beat": self.current_beat,
+            "line_index": self.chart_position.line_index,
+            "section": self.chart_position.section_name, "tracking_state": self.tracking_state,
+            "bar_offset": self._position_estimator.bar_offset,
+            "expected_chord": self.expected_chord, "detected_chord": self.detected_chord,
+        }
+
+    def format_position_diagnostics(self) -> str:
+        data = self.get_position_diagnostics()
+        return (
+            f"CLOCK: Bar {data['clock_bar']} Beat {data['clock_beat']} | "
+            f"MUSICAL POSITION: Bar {data['current_bar']} Beat {data['current_beat']} | "
+            f"CHART LINE: {data['line_index']} | SECTION: {data['section']} | "
+            f"TRACKING: {data['tracking_state']} | BAR OFFSET: {data['bar_offset']:+d} | "
+            f"EXPECTED: {data['expected_chord']} | DETECTED: {data['detected_chord']}"
+        )
 
     # ============================================================
     # Navegação Manual (Ensaio / Rehearsal Mode)
@@ -337,26 +395,14 @@ class SongSession:
         self._song.key = target_key
 
         # Reavalia a posição atual sob a nova cifra
-        cur_bar = max(1, self._clock.bar)
-        self._current_chart_pos = self._alignment.get_position_at(cur_bar, 1.0)
-        self._context.chord = self._current_chart_pos.current_chord
+        self._current_chart_pos = self._position_estimator.refresh_position()
+        self._publish_position()
         return self._chart
 
     def seek_to_bar(self, bar: int) -> ChartPosition:
         """Salta a reprodução/estudo diretamente para um compasso específico."""
-        target_bar = max(1, min(self._alignment.total_bars, bar))
-        bar_duration = self._clock.bar_duration
-        target_time = (target_bar - 1) * bar_duration
-        self._clock.seek(target_time)
-        self._current_chart_pos = self._alignment.get_position_at(target_bar, 1.0)
-        self._current_fused_state = self._fusion.fuse(
-            chart_pos=self._current_chart_pos,
-            detected_chord="--",
-            chord_confidence=0.0,
-            timestamp=target_time
-        )
-        self._context.bar = target_bar
-        self._context.chord = self._current_fused_state.effective_chord
+        self._current_chart_pos = self._position_estimator.seek_to_bar(bar)
+        self._publish_position()
         return self._current_chart_pos
 
     def next_bar(self) -> ChartPosition:
@@ -451,13 +497,6 @@ class SongSession:
         self._context.key = parsed.key
         self._alignment = ChartAlignment(self._chart)
         self._position_estimator.set_alignment(self._alignment)
-        # Atualiza a posição atual baseada no compasso e beat correntes
-        safe_bar = max(1, min(self._alignment.total_bars, self._clock.bar))
-        self._current_chart_pos = self._alignment.get_position_at(safe_bar, float(self._clock.beat), self._clock.elapsed_time)
-        self._current_fused_state = self._fusion.fuse(
-            chart_pos=self._current_chart_pos,
-            detected_chord=self._current_fused_state.detected_chord,
-            chord_confidence=self._current_fused_state.confidence,
-            timestamp=self._clock.elapsed_time
-        )
-
+        self._position_estimator.set_capo(self._chart.capo_semitones)
+        self._current_chart_pos = self._position_estimator.refresh_position()
+        self._publish_position()

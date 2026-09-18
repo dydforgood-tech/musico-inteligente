@@ -86,7 +86,7 @@ class MainWindow:
 
         # Gerenciador de Projetos, Setlist e Músico Play-Along (v0.4)
         self.project_manager = ProjectManager(project_file_path or DEFAULT_PROJECT_PATH)
-        self.virtual_players = VirtualPlayerRegistry()
+        self.virtual_players = VirtualPlayerRegistry(bass_player=self.analyzer.bass_player)
         self._follow_mode_enabled = True
         self._has_unsaved_chart_edits = False
 
@@ -1082,7 +1082,10 @@ class MainWindow:
 
     def _on_stop(self) -> None:
         self.player.stop()
-        self.analyzer.bass_player.reset()
+        self.analyzer.reset_musical_history()
+        if self.project_manager.active_session is not None:
+            self.project_manager.active_session.stop()
+        self.virtual_players.reset_all()
         self.waveform_view.set_playhead_position(0.0)
         self.seek_var.set(0.0)
         self.lbl_time_cur.config(text="00:00")
@@ -1162,7 +1165,9 @@ class MainWindow:
                 if state == PlaybackState.PLAYING or self._is_user_dragging_slider:
                     frame_idx = int(pos * sr)
                     chunk = self._current_source.get_chunk_at(frame_idx, 4096)
-                    ctx = self.analyzer.analyze_chunk(chunk, sr, pos)
+                    ctx = self.analyzer.analyze_chunk(chunk, sr, pos,
+                                                      session=self.project_manager.active_session,
+                                                      players=self.virtual_players)
 
                     # 1. Nota Atual
                     if ctx.note != "--":
@@ -1218,7 +1223,7 @@ class MainWindow:
                     if ctx.bpm > 0:
                         self.lbl_val_bpm.config(text=f"{ctx.bpm:.0f} BPM", fg="#ffffff")
                         self.lbl_sub_meter.config(text=f"Compasso: {ctx.bar}  |  {ctx.meter}", fg="#ffffff")
-                        self.lbl_sub_beat.config(text=f"Tempo {ctx.beat} / {self.analyzer.clock.beats_per_bar}", fg="#ffffff")
+                        self.lbl_sub_beat.config(text=f"Tempo {ctx.beat} / {ctx.meter.split('/')[0]}", fg="#ffffff")
 
                         leds = ["○", "○", "○", "○"]
                         b_idx = max(0, min(3, ctx.beat - 1))
@@ -1320,13 +1325,6 @@ class MainWindow:
                     # 11. Músico Play-Along & Fusão Cifra-Áudio (v0.4)
                     if self.project_manager.active_session:
                         session = self.project_manager.active_session
-                        session.update_audio_tick(
-                            timestamp=pos,
-                            detected_chord=ctx.chord,
-                            detected_confidence=ctx.chord_confidence,
-                            detected_key=ctx.key,
-                            detected_bpm=ctx.bpm
-                        )
                         self._update_playalong_hud_from_session(session)
 
                         # Realimenta a cifra como PRIOR da detecção do próximo frame
@@ -2766,7 +2764,6 @@ class MainWindow:
                             end_idx = f"{c_idx}+{len(target_chord)}c"
                             self.text_chart_view.tag_add("active_chord", c_idx, end_idx)
                             found_chord = True
-                            line_idx = cand_line
                             break
 
         # Se for linha de letra avulsa ou intervalo sem acorde, destaca a linha ativa suavemente
@@ -2789,7 +2786,7 @@ class MainWindow:
         self.lbl_playalong_chord.config(text=session.current_chord)
         self.lbl_playalong_next_chord.config(text=session.next_chord)
         self.lbl_playalong_bar_beat.config(
-            text=f"Comp. {session.current_bar}  |  Tempo {session.current_beat} / 4"
+            text=f"Comp. {session.current_bar}  |  Tempo {session.current_beat} / {session.clock.beats_per_bar}"
         )
         self.lbl_playalong_bpm.config(text=f"{session.clock.bpm:.1f} BPM")
 
@@ -2824,6 +2821,8 @@ class MainWindow:
 
         if self._follow_mode_enabled:
             self._highlight_chart_position(session.chart_position)
+        if getattr(self, "_bass_debug_visible", False):
+            self.lbl_status_msg.config(text=session.format_position_diagnostics())
 
 
     def _on_close(self) -> None:

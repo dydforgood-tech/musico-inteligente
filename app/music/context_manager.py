@@ -179,8 +179,12 @@ class MusicalContextManager:
 
         ctx.bpm = self._clock.bpm
         ctx.meter = self._clock.meter
-        ctx.bar = self._clock.bar
-        ctx.beat = self._clock.beat
+        # Sem cifra, a posição musical coincide com a referência temporal.
+        ctx.clock_bar = self._clock.bar
+        ctx.clock_beat = self._clock.beat
+        ctx.bar_offset = 0
+        ctx.bar = ctx.clock_bar
+        ctx.beat = ctx.clock_beat
         ctx.beat_position = self._clock.beat_position
         ctx.is_beat = self._clock.is_beat
 

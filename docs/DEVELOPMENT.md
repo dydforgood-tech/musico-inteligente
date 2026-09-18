@@ -54,7 +54,7 @@ Execute na raiz:
 python -B -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-A versão inicial publicada passou em 193 testes, incluindo 15 regressões novas.
+A suíte atual passou em 210 testes, incluindo 17 regressões da posição musical.
 A suíte inclui um teste Tkinter e precisa de sessão gráfica; em Linux sem tela,
 use um display virtual. A passagem dos testes não substitui audição e testes de hardware.
 As amostras WAV incluídas são geradas pelo próprio projeto.
@@ -65,3 +65,31 @@ Descreva o problema e o comportamento esperado, indique os arquivos envolvidos e
 faça mudanças pequenas. Para correções de integração, adicione uma regressão que
 reproduza a falha, rode a suíte e descreva os resultados no commit ou pull request.
 Não envie tokens, arquivos `.env`, repertórios pessoais ou cópias de segurança.
+
+## Posição musical consolidada
+
+O relógio representa tempo bruto. A localização oficial é produzida por
+`PositionEstimator` e `ChartAlignment`, consolidada em `ChartPosition` e publicada
+por `SongSession`. Consulte `current_bar`/`current_beat` para a música e
+`clock_bar`/`clock_beat` para diagnóstico temporal.
+
+A convenção existente é `musical_bar = clock_bar - bar_offset`: relógio 20 e
+offset -16 representam compasso musical 36; relógio 21 representa 37. Perda
+de detecção preserva o offset. Recuperações locais e globais persistem o ajuste.
+Troca de música e reset eliminam o offset e o histórico da sessão anterior.
+
+`AudioAnalyzer` entrega o contexto de áudio à sessão antes de despachar os
+instrumentos. O `MusicalContext` publicado contém compasso, tempo, fase, seção,
+linha, confiança e tracking do snapshot oficial; mantém relógio e offset em campos
+de diagnóstico. Estrutura, memória e predição recebem essas coordenadas.
+O registry reutiliza o baixo conectado ao mixer, evitando um segundo baixo.
+A UI consome o snapshot para HUD, Follow Mode e scroll.
+
+`ChartAlignment.align_from_clock` e o modo independente de `ContextManager`
+continuam auxiliares sem cifra/reancoragem. Não use esses caminhos para localizar
+uma sessão com cifra. A estimativa descritiva de estrutura não calcula offsets.
+
+As regressões em `tests/test_position_source_of_truth.py` cobrem ausência de
+offset, reancoragens para frente/para trás, continuidade sem áudio, recuperação
+local e por progressão, troca, reset, transposição, edição, navegação, baixo,
+memória, predição, diagnóstico e Follow Mode, incluindo o despacho integrado.

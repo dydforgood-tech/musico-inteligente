@@ -34,6 +34,7 @@ from app.analysis.chord_history import ChordHistory, ChordEvent
 from app.analysis.key_history import KeyHistory
 from app.music.musical_clock import MusicalClock
 from app.music.musical_context import MusicalContext
+from app.music.chart_alignment import ChartPosition
 
 
 class MusicStructureAnalyzer:
@@ -52,6 +53,7 @@ class MusicStructureAnalyzer:
 
         # Rastreamento incremental de compassos processados
         self._last_processed_bar: int = 0
+        self._last_bar_offset: Optional[int] = None
         self._current_phrase_chords: List[str] = []
         self._phrase_start_bar: int = 1
         self._phrase_start_time: float = 0.0
@@ -94,12 +96,14 @@ class MusicStructureAnalyzer:
         """Reinicia todos os motores de aprendizado estrutural para uma nova faixa."""
         self._pattern_memory.reset()
         self._position_estimator.reset()
+        self._prediction_engine.reset()
         self._structure = MusicStructure()
         self._sections.clear()
         self._section_counter = 0
         self._active_section = None
         self._active_pattern = None
         self._last_processed_bar = 0
+        self._last_bar_offset = None
         self._current_phrase_chords.clear()
         self._phrase_start_bar = 1
         self._phrase_start_time = 0.0
@@ -163,15 +167,25 @@ class MusicStructureAnalyzer:
         context: MusicalContext,
         chord_history: ChordHistory,
         key_history: KeyHistory,
-        clock: MusicalClock
+        clock: MusicalClock,
+        chart_position: Optional[ChartPosition] = None,
     ) -> MusicStructure:
         """Executa atualização incremental leve em tempo real (chamada em cada ciclo da UI)."""
-        current_bar = max(1, clock.bar)
-        current_beat = max(1, clock.beat)
+        current_bar = max(1, context.bar)
+        current_beat = max(1, context.beat)
         timestamp = context.timestamp
 
         # Acumula acorde vigente na frase se o compasso avançou
-        if current_bar > self._last_processed_bar:
+        offset_changed = self._last_bar_offset is not None and context.bar_offset != self._last_bar_offset
+        self._last_bar_offset = context.bar_offset
+        if current_bar != self._last_processed_bar or offset_changed:
+            if offset_changed or self._last_processed_bar == 0 or current_bar != self._last_processed_bar + 1:
+                # Não misture frases separadas por reancoragem ou seek.
+                self._current_phrase_chords.clear()
+                self._phrase_start_bar = current_bar
+                self._phrase_start_time = timestamp
+                self._active_section = None
+                self._active_pattern = None
             self._last_processed_bar = current_bar
             curr_chord = context.chord if context.chord != "--" else "C"
             self._current_phrase_chords.append(curr_chord)
@@ -255,7 +269,9 @@ class MusicStructureAnalyzer:
             clock=clock,
             current_section=self._active_section,
             current_pattern=self._active_pattern,
-            occurrence_index=self._active_pattern.occurrence_count if self._active_pattern else 1
+            occurrence_index=self._active_pattern.occurrence_count if self._active_pattern else 1,
+            musical_context=context,
+            chart_position=chart_position,
         )
 
         # Produz predição antecipada

@@ -8,6 +8,8 @@ padrão em execução e índice da ocorrência, sem saltos e sincronizado com o 
 from typing import Optional
 from app.music.music_structure import MusicPosition, MusicSection, MusicalPattern
 from app.music.musical_clock import MusicalClock
+from app.music.musical_context import MusicalContext
+from app.music.chart_alignment import ChartPosition
 
 
 class MusicPositionEstimator:
@@ -30,12 +32,16 @@ class MusicPositionEstimator:
         clock: MusicalClock,
         current_section: Optional[MusicSection] = None,
         current_pattern: Optional[MusicalPattern] = None,
-        occurrence_index: int = 1
+        occurrence_index: int = 1,
+        musical_context: Optional[MusicalContext] = None,
+        chart_position: Optional[ChartPosition] = None,
     ) -> MusicPosition:
         """Calcula a posição estrutural atual e o progresso relativo na seção ativa."""
-        bar = max(1, clock.bar)
-        beat = max(1, clock.beat)
-        bar_pos = clock.bar_position # Fração [0.0 a 1.0) dentro do compasso atual
+        # Este componente descreve estrutura; não localiza nem aplica offsets.
+        bar = max(1, musical_context.bar if musical_context is not None else clock.bar)
+        beat = max(1, musical_context.beat if musical_context is not None else clock.beat)
+        phase = musical_context.beat_position if musical_context is not None else clock.beat_position
+        bar_pos = (beat - 1 + phase) / clock.beats_per_bar
 
         sec_name = current_section.section_type if current_section else "UNKNOWN"
         pat_id = current_pattern.id if current_pattern else (current_section.pattern_id if current_section else "--")
@@ -52,6 +58,11 @@ class MusicPositionEstimator:
         else:
             progress = 0.0
             conf = 0.40
+
+        if chart_position is not None:
+            sec_name = chart_position.section_name
+            progress = chart_position.section_progress
+            conf = chart_position.confidence
 
         self._current_position = MusicPosition(
             current_time=round(timestamp, 3),

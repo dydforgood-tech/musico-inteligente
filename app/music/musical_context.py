@@ -103,6 +103,22 @@ class MusicalContext:
     prediction_confidence: float = 0.0          # Confiança da predição
     prediction_reason: str = "--"               # Justificativa probabilística da predição
 
+    # Diagnóstico temporal; bar/beat são sempre as coordenadas musicais publicadas.
+    clock_bar: int = 1
+    clock_beat: int = 1
+    bar_offset: int = 0
+    line_index: int = 1
+    tracking_state: str = "TRACKING"
+    position_confidence: float = 0.95
+
+    @property
+    def current_bar(self) -> int:
+        return self.bar
+
+    @property
+    def current_beat(self) -> int:
+        return self.beat
+
     def sync_aliases(self) -> None:
         """Garante que os aliases estejam sempre estritamente sincronizados."""
         self.current_note = self.note
@@ -152,6 +168,12 @@ class MusicalContext:
         self.beat = 1
         self.beat_position = 0.0
         self.bar = 1
+        self.clock_bar = 1
+        self.clock_beat = 1
+        self.bar_offset = 0
+        self.line_index = 1
+        self.tracking_state = "TRACKING"
+        self.position_confidence = 0.95
         self.meter = "4/4"
         self.time_signature = "4/4"
         self.is_beat = False
@@ -195,6 +217,12 @@ class MusicalContext:
             "meter": self.meter,
             "bar": self.bar,
             "beat": self.beat,
+            "position": {
+                "clock_bar": self.clock_bar, "clock_beat": self.clock_beat,
+                "bar_offset": self.bar_offset, "line_index": self.line_index,
+                "tracking_state": self.tracking_state,
+                "confidence": self.position_confidence,
+            },
             "confidence": round(self.confidence, 2),
             "latency_ms": {
                 "processing": round(self.processing_latency, 2),

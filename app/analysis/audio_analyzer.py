@@ -15,7 +15,11 @@ Executa a cadeia completa e integrada de DSP, MIR e Memória Temporal:
 """
 
 import threading
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.song.song_session import SongSession
+    from app.instruments.registry import VirtualPlayerRegistry
 import numpy as np
 
 from app.analysis.pitch_detector import PitchDetector, PitchResult, create_pitch_detector, AVAILABLE_PITCH_DETECTORS
@@ -43,6 +47,7 @@ class AudioAnalyzer:
     def __init__(self, pitch_algorithm: str = "Autocorrelação", sample_rate: int = 44100,
                  chunk_size: int = 4096, chroma_method: str = "harmonic", detect_extensions: bool = False):
         self._lock = threading.RLock()
+        self._active_session: Optional["SongSession"] = None
         self._sample_rate = sample_rate
         self._chunk_size = chunk_size
 
@@ -96,7 +101,7 @@ class AudioAnalyzer:
     @property
     def context(self) -> MusicalContext:
         """Acesso thread-safe ao contexto musical consolidado."""
-        return self._context_manager.context
+        return self._active_session.context if self._active_session is not None else self._context_manager.context
 
     @property
     def context_manager(self) -> MusicalContextManager:
@@ -119,27 +124,27 @@ class AudioAnalyzer:
     @property
     def structure_analyzer(self) -> MusicStructureAnalyzer:
         """Analisador de forma e estrutura musical."""
-        return self._structure_analyzer
+        return self._active_session.structure_analyzer if self._active_session is not None else self._structure_analyzer
 
     @property
     def pattern_memory(self):
         """Memória de padrões harmônicos e transições."""
-        return self._structure_analyzer.pattern_memory
+        return self.structure_analyzer.pattern_memory
 
     @property
     def prediction_engine(self):
         """Motor probabilístico de predição e antecipação."""
-        return self._structure_analyzer.prediction_engine
+        return self.structure_analyzer.prediction_engine
 
     @property
     def position_estimator(self):
         """Estimador de posicionamento musical e progresso de seção."""
-        return self._structure_analyzer.position_estimator
+        return self.structure_analyzer.position_estimator
 
     @property
     def music_structure(self) -> MusicStructure:
         """Estrutura musical global consolidada."""
-        return self._structure_analyzer.structure
+        return self.structure_analyzer.structure
 
     @property
     def bass_player(self) -> BassPlayer:
@@ -212,6 +217,7 @@ class AudioAnalyzer:
     def reset_musical_history(self) -> None:
         """Reinicia acumuladores de histórico, relógio e instrumentos ao carregar nova música ou dar stop."""
         with self._lock:
+            self._active_session = None
             self._key_detector.reset()
             self._harmonic_analyzer.chord_history.clear()
             self._context_manager.reset()
@@ -227,7 +233,9 @@ class AudioAnalyzer:
             self._context_manager.context.sample_rate = sample_rate
             self._bass_player.synthesizer.set_sample_rate(sample_rate)
 
-    def analyze_chunk(self, audio_chunk: np.ndarray, sample_rate: int, timestamp: float) -> MusicalContext:
+    def analyze_chunk(self, audio_chunk: np.ndarray, sample_rate: int, timestamp: float,
+                      session: Optional["SongSession"] = None,
+                      players: Optional["VirtualPlayerRegistry"] = None) -> MusicalContext:
         """Executa a cadeia completa de análise musical e despacha o MusicalContext para a Banda Virtual."""
         with self._lock:
             self._latency_tracker.start_measurement()
@@ -279,23 +287,30 @@ class AudioAnalyzer:
                 lat_metrics=lat_metrics
             )
 
-            # 8. Análise de Estrutura Musical, Memória de Padrões e Predição (v0.3)
-            self._structure_analyzer.update_online(
-                context=ctx,
-                chord_history=self._context_manager.chord_history,
-                key_history=self._context_manager.key_history,
-                clock=self._context_manager.clock
-            )
-
-            # 9. Despachar o contexto consolidado para os instrumentos autônomos da Banda Virtual
-            self._band.dispatch_context(ctx)
+            # Localiza primeiro; estrutura, predição e instrumentos só recebem a posição final.
+            self._active_session = session
+            if session is not None:
+                session.update_audio_tick(
+                    timestamp=timestamp, detected_chord=ctx.chord,
+                    detected_confidence=ctx.chord_confidence, detected_key=ctx.key,
+                    detected_bpm=ctx.bpm, source_context=ctx)
+                ctx = session.context
+            else:
+                # No modo livre, não há cifra: coordenadas musicais coincidem com o relógio.
+                self._structure_analyzer.update_online(
+                    ctx, self._context_manager.chord_history,
+                    self._context_manager.key_history, self._context_manager.clock)
+            if players is not None:
+                players.dispatch_context(ctx)
+            else:
+                self._band.dispatch_context(ctx)
 
             return ctx
 
     def export_structure_report(self, filepath: str) -> None:
         """Exporta o relatório estrutural completo para arquivo JSON."""
         with self._lock:
-            export_structure_report(self._structure_analyzer.structure, filepath)
+            export_structure_report(self.structure_analyzer.structure, filepath)
 
     def analyze_offline_structure(self, chords_with_timing: list, bpm: float = 120.0):
         """Executa a análise estrutural offline completa a partir de eventos de acordes."""

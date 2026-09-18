@@ -121,7 +121,7 @@ Você também pode abrir qualquer arquivo seu de violão ou teclado em formato *
 
 ---
 
-## 🧪 Suíte de Testes Automatizados (193 Testes)
+## 🧪 Suíte de Testes Automatizados (210 Testes)
 
 Execute todos os testes unitários e de integração com o comando:
 
@@ -263,7 +263,7 @@ No visualizador de cifra (aba **Músico Play-Along & Cifra**):
 ## Desenvolvimento e colaboração
 
 Leia [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) para entender a arquitetura,
-os cuidados com dados locais e como validar mudanças. A suíte atual contém 193 testes.
+os cuidados com dados locais e como validar mudanças. A suíte atual contém 210 testes.
 O repertório `virtual_band_project.json` é local e não é enviado ao GitHub.
 A interface restaura esse arquivo ao iniciar; sem ele, cria músicas de demonstração.
 

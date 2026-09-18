@@ -41,10 +41,14 @@ class MusicPrediction:
     beats_until_change: int = 0
     confidence: float = 0.40
     prediction_reason: str = "Aguardando evidências de repetição"
+    source_bar: int = 1
+    source_beat: int = 1
     predicted_sequence: List[Tuple[int, str]] = field(default_factory=list) # [(bar_relativo, acorde)]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "source_bar": self.source_bar,
+            "source_beat": self.source_beat,
             "predicted_section": self.predicted_section,
             "predicted_pattern": self.predicted_pattern,
             "predicted_chords": list(self.predicted_chords),
@@ -63,8 +67,26 @@ class PredictionEngine:
 
     def __init__(self, default_beats_per_bar: int = 4):
         self._beats_per_bar = default_beats_per_bar
+        self._latest_prediction: Optional[MusicPrediction] = None
 
-    def predict_next(
+    @property
+    def latest_prediction(self) -> Optional[MusicPrediction]:
+        return self._latest_prediction
+
+    def reset(self) -> None:
+        self._latest_prediction = None
+
+    def predict_next(self, current_position: MusicPosition,
+                     current_pattern: Optional[MusicalPattern], pattern_memory: PatternMemory,
+                     current_section_type: str = "UNKNOWN", bars_ahead: int = 1) -> MusicPrediction:
+        """Consome a posição musical fornecida; não consulta relógios ou offsets."""
+        self._latest_prediction = self._predict_next(
+            current_position, current_pattern, pattern_memory, current_section_type, bars_ahead)
+        self._latest_prediction.source_bar = current_position.current_bar
+        self._latest_prediction.source_beat = current_position.current_beat
+        return self._latest_prediction
+
+    def _predict_next(
         self,
         current_position: MusicPosition,
         current_pattern: Optional[MusicalPattern],

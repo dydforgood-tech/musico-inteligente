@@ -15,7 +15,7 @@ recuperação contextual por janela local e correspondência de progressão.
 """
 
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Optional, List, Dict, Tuple, Any
 
@@ -150,6 +150,43 @@ class PositionEstimator:
         """Deslocamento global detectado entre a cifra e a execução (capotraste/tom)."""
         return self._transposition.semitones
 
+    @property
+    def bar_offset(self) -> int:
+        """Deslocamento conhecido: musical_bar = clock_bar - bar_offset."""
+        return self._bar_offset
+
+    def refresh_position(self) -> ChartPosition:
+        """Reconsulta a cifra usando o offset conhecido, sem nova evidência de áudio."""
+        nominal = self._alignment.get_position_at(
+            max(1, self._clock.bar - self._bar_offset),
+            self._clock.beat + self._clock.beat_position,
+            self._clock.elapsed_time,
+        )
+        return self._consolidate_position(nominal, "--", 0.0, "Posição atualizada", nominal.next_chord)
+
+    def seek_to_bar(self, bar: int) -> ChartPosition:
+        """Reancora a cifra manualmente sem alterar o tempo bruto do áudio."""
+        target = max(1, min(self._alignment.total_bars, int(bar)))
+        self.reset()
+        self._bar_offset = self._clock.bar - target
+        return self.refresh_position()
+
+    def _consolidate_position(self, nominal: ChartPosition, detected_chord: str,
+                              detected_confidence: float, action_note: str,
+                              predicted_chord: str) -> ChartPosition:
+        position = replace(nominal, confidence=self._position_confidence,
+                           tracking_state=self._tracking_state.value)
+        self._current_estimated_position = EstimatedPosition(
+            bar=position.current_bar, beat=position.current_beat,
+            line_index=position.line_index, current_chord=position.current_chord,
+            expected_chord=position.current_chord, detected_chord=detected_chord,
+            predicted_chord=predicted_chord, section_name=position.section_name,
+            section_progress=position.section_progress, confidence=position.confidence,
+            chord_confidence=detected_confidence, tracking_state=self._tracking_state,
+            action_note=action_note, timestamp=position.absolute_time,
+        )
+        return position
+
     def set_alignment(self, alignment: ChartAlignment) -> None:
         """Atualiza o alinhamento estruturado da cifra."""
         self._alignment = alignment
@@ -182,14 +219,15 @@ class PositionEstimator:
         confident_audio = bool(detected_chord) and detected_chord not in ("--", "UNKNOWN", "N") and detected_confidence >= 0.25
 
         # Registra o acorde detectado (buffer para localização por progressão)
-        if confident_audio and (not self._recent_detected or self._recent_detected[-1] != detected_chord):
+        chord_changed = confident_audio and (not self._recent_detected or self._recent_detected[-1] != detected_chord)
+        if chord_changed:
             self._recent_detected.append(detected_chord)
 
         # 1.5. LOCALIZAÇÃO POR ÁUDIO — encaixa a posição onde a progressão recente casa
         # na cifra, reancorando o deslocamento relógio→cifra. É isto que faz o programa
         # SEGUIR o músico em vez de apenas percorrer a cifra em ordem pelo tempo.
         localize_note = ""
-        if self._follow_audio and confident_audio:
+        if self._follow_audio and chord_changed:
             tentative_bar = max(1, clock_bar - self._bar_offset)
             loc = self._global_localize(near_bar=tentative_bar)
             if loc is not None:
@@ -241,6 +279,9 @@ class PositionEstimator:
             # ----------------------------------------------------
             self._consecutive_unknown_seconds += dt
             self._consecutive_mismatch_seconds = 0.0
+            if self._consecutive_unknown_seconds > 2.5:
+                # Uma sequência interrompida não é evidência para reancorar após a perda.
+                self._recent_detected.clear()
 
             # Degradação suave da confiança temporal
             if self._consecutive_unknown_seconds > 8.0:
@@ -384,46 +425,11 @@ class PositionEstimator:
             if self._tracking_state == TrackingState.LOST:
                 self._tracking_state = TrackingState.RECOVERING
 
-        # 3. Consolidação do Estado e Retorno
-        self._current_estimated_position = EstimatedPosition(
-            bar=current_bar,
-            beat=current_beat,
-            line_index=nominal_pos.line_index,
-            current_chord=effective_chord,
-            expected_chord=expected_chord,
-            detected_chord=detected_chord if not is_unknown_audio else "--",
-            predicted_chord=predicted_chord,
-            section_name=nominal_pos.section_name,
-            section_progress=nominal_pos.section_progress,
-            confidence=self._position_confidence,
-            chord_confidence=detected_confidence,
-            tracking_state=self._tracking_state,
-            action_note=action_note,
-            timestamp=timestamp
-        )
-
-        return ChartPosition(
-            current_bar=current_bar,
-            current_beat=current_beat,
-            section_id=nominal_pos.section_id,
-            section_name=nominal_pos.section_name,
-            section_type=nominal_pos.section_type,
-            section_index=nominal_pos.section_index,
-            current_chord=effective_chord,
-            next_chord=nominal_pos.next_chord,
-            next_section_name=nominal_pos.next_section_name,
-            chord_index_in_section=nominal_pos.chord_index_in_section,
-            chord_index=nominal_pos.chord_index,
-            element_index=nominal_pos.element_index,
-            line_index=nominal_pos.line_index,
-            section_progress=nominal_pos.section_progress,
-            bars_until_chord_change=nominal_pos.bars_until_chord_change,
-            bars_until_section_change=nominal_pos.bars_until_section_change,
-            current_lyric=nominal_pos.current_lyric,
-            is_last_chord=nominal_pos.is_last_chord,
-            absolute_time=timestamp,
-            confidence=self._position_confidence,
-            tracking_state=self._tracking_state.value
+        # Todas as recuperações, inclusive as locais, persistem na mesma transformação.
+        self._bar_offset = clock_bar - current_bar
+        return self._consolidate_position(
+            nominal_pos, detected_chord if not is_unknown_audio else "--",
+            detected_confidence, action_note, nominal_pos.next_chord,
         )
 
     @staticmethod

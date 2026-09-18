@@ -13,7 +13,10 @@ from app.music.musical_clock import MusicalClock
 
 @dataclass
 class ChartPosition:
-    """Posição detalhada no ChordChart no instante atual com resolução por linha."""
+    """Posição musical consolidada: compasso, beat fracionário, linha e seção.
+
+    Os consumidores usam este snapshot. O relógio bruto permanece separado.
+    """
     current_bar: int = 1
     current_beat: float = 1.0
     section_id: str = "--"
@@ -224,7 +227,10 @@ class ChartAlignment:
         )
 
     def align_from_clock(self, clock: MusicalClock) -> ChartPosition:
-        """Retorna a posição da cifra alinhada diretamente ao relógio musical."""
+        """Alinhamento temporal sem localização por áudio (sem offset).
+
+        Sessões com rastreamento devem consumir SongSession.chart_position.
+        """
         return self.get_position_at(
             bar=clock.bar,
             beat=clock.beat + clock.beat_position,
