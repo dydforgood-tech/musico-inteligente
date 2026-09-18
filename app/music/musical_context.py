@@ -1,0 +1,220 @@
+"""Representação do Contexto Musical Compartilhado do Virtual Band AI (v0.1-Completo).
+
+Este objeto atua como o barramento de dados central do sistema.
+O 'ouvido' (módulo de análise + context manager) escreve neste contexto e todos
+os futuros instrumentos virtuais (baixista, baterista, etc.) o consumirão
+diretamente, sem precisar analisar o sinal de áudio bruto.
+"""
+
+from dataclasses import dataclass, field
+from typing import List, Optional, Dict
+
+
+@dataclass
+class MusicalContext:
+    """Estado musical instantâneo e temporal do sistema em um determinado instante."""
+
+    # ============================================================
+    # 1. Posição Temporal e Amostragem
+    # ============================================================
+    timestamp: float = 0.0                      # Posição atual do áudio em segundos
+    sample_rate: int = 44100                    # Taxa de amostragem da fonte de áudio
+
+    # ============================================================
+    # 2. Análise Monofônica / Nota Dominante (Pitch)
+    # ============================================================
+    note: str = "--"                            # Nome da nota com oitava (ex: "C3", "G2")
+    current_note: str = "--"                    # Alias de compatibilidade
+    frequency: float = 0.0                      # Frequência fundamental f0 em Hz (ex: 130.81)
+    current_frequency: float = 0.0              # Alias de compatibilidade
+    note_confidence: float = 0.0                # Grau de certeza do pitch (0.0 a 1.0)
+    cents_deviation: float = 0.0                # Desvio de afinação em cents (-50 a +50)
+    chroma_vector: List[float] = field(default_factory=lambda: [0.0] * 12)  # Energia das 12 classes C..B
+
+    # ============================================================
+    # 3. Análise Harmônica e Acorde Atual
+    # ============================================================
+    chord: str = "--"                           # Cifra completa (ex: "C", "G/B", "Am")
+    current_chord: str = "--"                   # Alias de compatibilidade
+    chord_root: str = "--"                      # Tônica do acorde (ex: "C")
+    chord_quality: str = "--"                   # Qualidade (ex: "major", "minor")
+    bass_note: str = "--"                       # Nota mais grave detectada (ex: "B" para "G/B")
+    inversion: str = "root"                     # "root", "first", "second"
+    detected_notes: List[str] = field(default_factory=list)  # Ex: ["C", "E", "G"]
+    chord_confidence: float = 0.0               # Confiança do acorde (0.0 a 1.0)
+
+    # Contexto Temporal do Acorde
+    previous_chord: str = "--"                  # Acorde imediatamente anterior confirmado
+    chord_start_time: float = 0.0               # Momento exato em que o acorde atual começou
+    chord_duration: float = 0.0                 # Tempo decorrido no acorde atual em segundos
+
+    # ============================================================
+    # 4. Tonalidade (Key) e Modulação
+    # ============================================================
+    key: str = "--"                             # Tonalidade estimada confirmada (ex: "C Major", "A Minor")
+    current_key: str = "--"                     # Alias de compatibilidade
+    key_confidence: float = 0.0                 # Grau de correlação estatística consolidado (0.0 a 1.0)
+    previous_key: str = "--"                    # Tonalidade confirmada anterior
+    key_start_time: float = 0.0                 # Momento em que a tonalidade atual se consolidou
+    key_duration: float = 0.0                   # Tempo contínuo na tonalidade atual em segundos
+    key_candidate: str = "--"                   # Tonalidade candidata sob observação (ex: "E Minor")
+    candidate_confidence: float = 0.0           # Confiança da candidata (0.0 a 1.0)
+    candidate_duration: float = 0.0             # Tempo contínuo em que a candidata lidera (segundos)
+    local_tonal_center: str = "--"              # Centro tonal local (raiz harmônica imediata)
+
+
+    # ============================================================
+    # 5. Relógio Musical (Musical Clock) e Métrica Rítmica
+    # ============================================================
+    bpm: float = 0.0                            # Andamento estimado em batidas por minuto
+    beat: int = 1                               # Número do tempo no compasso (1, 2, 3, 4...)
+    beat_position: float = 0.0                  # Posição fracionária dentro do tempo [0.0 a 1.0)
+    bar: int = 1                                # Número do compasso (1, 2, 3... 12...)
+    meter: str = "4/4"                          # Fórmula de compasso ativa (ex: "4/4", "3/4")
+    time_signature: str = "4/4"                 # Alias de compatibilidade
+    is_beat: bool = False                       # Pulso no instante atual do clique
+
+    # ============================================================
+    # 6. Confiança Global
+    # ============================================================
+    confidence: float = 0.0                     # Confiança geral consolidada do sistema
+
+    # ============================================================
+    # 7. Métricas de Latência Quadripartida (Sem valores fictícios)
+    # ============================================================
+    processing_latency: float = 0.0             # Tempo de cálculo DSP do bloco em ms
+    analysis_window: float = 0.0                # Duração do bloco de áudio analisado em ms
+    analysis_latency: float = 0.0               # Alias de compatibilidade
+    stabilization_delay: float = 0.0            # Atraso configurado para confirmação temporal em ms
+    estimated_musical_latency: float = 0.0      # Latência perceptível total estimada em ms
+    estimated_latency: float = 0.0              # Alias de compatibilidade
+
+    # ============================================================
+    # 8. Estrutura Musical e Antecipação Preditiva (Fase v0.3)
+    # ============================================================
+    current_section: str = "UNKNOWN"            # Seção ativa estimada (ex: "VERSE", "CHORUS")
+    current_pattern: str = "--"                 # ID do padrão ativo (ex: "P01")
+    section_progress: float = 0.0               # Progresso relativo na seção ativa [0.0 a 1.0]
+    structure_confidence: float = 0.0           # Confiança da inferência estrutural
+    predicted_next_section: str = "UNKNOWN"     # Próxima seção prevista por repetição
+    predicted_next_chords: List[str] = field(default_factory=list) # Próximos acordes (Look-ahead)
+    bars_until_change: int = 0                  # Quantidade de compassos até a mudança
+    beats_until_change: int = 0                 # Quantidade de tempos até a mudança
+    prediction_confidence: float = 0.0          # Confiança da predição
+    prediction_reason: str = "--"               # Justificativa probabilística da predição
+
+    def sync_aliases(self) -> None:
+        """Garante que os aliases estejam sempre estritamente sincronizados."""
+        self.current_note = self.note
+        self.current_frequency = self.frequency
+        self.current_chord = self.chord
+        self.current_key = self.key
+        self.time_signature = self.meter
+        self.analysis_latency = self.analysis_window
+        self.estimated_latency = self.estimated_musical_latency
+
+    def reset(self) -> None:
+        """Reinicia o contexto para o estado inicial neutro."""
+        self.timestamp = 0.0
+        self.note = "--"
+        self.current_note = "--"
+        self.frequency = 0.0
+        self.current_frequency = 0.0
+        self.note_confidence = 0.0
+        self.cents_deviation = 0.0
+        self.chroma_vector = [0.0] * 12
+
+        self.chord = "--"
+        self.current_chord = "--"
+        self.chord_root = "--"
+        self.chord_quality = "--"
+        self.bass_note = "--"
+        self.inversion = "root"
+        self.detected_notes.clear()
+        self.chord_confidence = 0.0
+
+        self.previous_chord = "--"
+        self.chord_start_time = 0.0
+        self.chord_duration = 0.0
+
+        self.key = "--"
+        self.current_key = "--"
+        self.key_confidence = 0.0
+        self.previous_key = "--"
+        self.key_start_time = 0.0
+        self.key_duration = 0.0
+        self.key_candidate = "--"
+        self.candidate_confidence = 0.0
+        self.candidate_duration = 0.0
+        self.local_tonal_center = "--"
+
+        self.bpm = 0.0
+        self.beat = 1
+        self.beat_position = 0.0
+        self.bar = 1
+        self.meter = "4/4"
+        self.time_signature = "4/4"
+        self.is_beat = False
+
+        self.confidence = 0.0
+        self.processing_latency = 0.0
+        self.analysis_window = 0.0
+        self.analysis_latency = 0.0
+        self.stabilization_delay = 0.0
+        self.estimated_musical_latency = 0.0
+        self.estimated_latency = 0.0
+
+        # Reset Estrutura e Predição (v0.3)
+        self.current_section = "UNKNOWN"
+        self.current_pattern = "--"
+        self.section_progress = 0.0
+        self.structure_confidence = 0.0
+        self.predicted_next_section = "UNKNOWN"
+        self.predicted_next_chords.clear()
+        self.bars_until_change = 0
+        self.beats_until_change = 0
+        self.prediction_confidence = 0.0
+        self.prediction_reason = "--"
+
+    def get_summary_dict(self) -> Dict:
+        """Retorna uma visão estruturada pronta para consumo por instrumentos virtuais."""
+        return {
+            "timestamp": round(self.timestamp, 3),
+            "note": self.note,
+            "frequency_hz": round(self.frequency, 2),
+            "chord": self.chord,
+            "previous_chord": self.previous_chord,
+            "chord_duration_s": round(self.chord_duration, 2),
+            "key": self.key,
+            "previous_key": self.previous_key,
+            "key_duration_s": round(self.key_duration, 2),
+            "key_candidate": self.key_candidate,
+            "candidate_confidence": round(self.candidate_confidence, 2),
+            "local_tonal_center": self.local_tonal_center,
+            "bpm": round(self.bpm, 1),
+            "meter": self.meter,
+            "bar": self.bar,
+            "beat": self.beat,
+            "confidence": round(self.confidence, 2),
+            "latency_ms": {
+                "processing": round(self.processing_latency, 2),
+                "window": round(self.analysis_window, 2),
+                "stabilization": round(self.stabilization_delay, 2),
+                "estimated_total": round(self.estimated_musical_latency, 2),
+            },
+            "structure": {
+                "section": self.current_section,
+                "pattern": self.current_pattern,
+                "progress": round(self.section_progress, 3),
+                "confidence": round(self.structure_confidence, 2),
+            },
+            "prediction": {
+                "next_section": self.predicted_next_section,
+                "next_chords": list(self.predicted_next_chords),
+                "bars_until_change": self.bars_until_change,
+                "beats_until_change": self.beats_until_change,
+                "confidence": round(self.prediction_confidence, 2),
+                "reason": self.prediction_reason,
+            }
+        }
+

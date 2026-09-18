@@ -1,0 +1,42 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+
+# --- Ferramentas / IDEs ---
+.vscode/
+.idea/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- Artefatos temporários de teste (gerados em runtime) ---
+*_temp.wav
+test_modulation_*.wav
+test_song_64s_*.wav
+
+# --- Áudio e projetos gerados localmente ---
+# (descomente se não quiser versionar áudios/projetos de exemplo)
+# *.wav
+# virtual_band_project.json
+
+# --- Sistema operacional ---
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Repertório e cópias locais
+virtual_band_project*.json
+.env
+.env.*
+*.log
