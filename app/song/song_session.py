@@ -294,7 +294,9 @@ class SongSession:
             (detected_bpm if detected_bpm > 0 else self._clock.bpm))
         self._current_chart_pos = self._position_estimator.update(
             timestamp=timestamp, detected_chord=detected_chord,
-            detected_confidence=detected_confidence, detected_key=detected_key)
+            detected_confidence=detected_confidence, detected_key=detected_key,
+            detected_note=source_context.note if source_context is not None else "--",
+            note_confidence=source_context.note_confidence if source_context is not None else 0.0)
         return self._publish_position(detected_chord, detected_confidence, detected_key, source_context)
 
     def _publish_position(self, detected_chord: str = "--", detected_confidence: float = 0.0,

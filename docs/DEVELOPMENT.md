@@ -54,7 +54,7 @@ Execute na raiz:
 python -B -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-A suíte atual passou em 210 testes, incluindo 17 regressões da posição musical.
+A suíte atual passou em 216 testes, incluindo 17 regressões da posição musical e 6 do seguimento por notas.
 A suíte inclui um teste Tkinter e precisa de sessão gráfica; em Linux sem tela,
 use um display virtual. A passagem dos testes não substitui audição e testes de hardware.
 As amostras WAV incluídas são geradas pelo próprio projeto.
@@ -93,3 +93,22 @@ As regressões em `tests/test_position_source_of_truth.py` cobrem ausência de
 offset, reancoragens para frente/para trás, continuidade sem áudio, recuperação
 local e por progressão, troca, reset, transposição, edição, navegação, baixo,
 memória, predição, diagnóstico e Follow Mode, incluindo o despacho integrado.
+
+## Seguimento por notas do instrumento de referência
+
+O `AudioAnalyzer` já extrai nota dominante e confiança. A `SongSession` passa essa
+evidência ao mesmo `PositionEstimator` responsável pelo alinhamento dos acordes.
+Notas são comparadas por classe de altura com as notas dos acordes soantes da
+cifra (inclusive capotraste). Tônica e demais notas do acorde têm pesos
+diferentes; uma nota estranha pode ser nota de passagem, sem forçar erro.
+
+O estimador reúne eventos de notas distintas e confiáveis. Após pelo menos
+três eventos, compara caminhos que permanecem no acorde ou avançam ao próximo
+compasso. Só altera `_bar_offset` quando um trecho distante vence a posição
+atual e as alternativas por margem suficiente. Passagens repetidas ou ambíguas
+não causam salto. Eventos muito antigos, troca de música, reset e edição da
+cifra limpam a sequência. O relógio permanece a base do avanço entre evidências.
+
+Uma cifra descreve acordes, não a melodia exata. Por isso o alinhamento por
+notas é probabilístico e pode se abster; ensaios reais com áudio de referência
+são necessários para calibrar pesos e limiares por instrumento.

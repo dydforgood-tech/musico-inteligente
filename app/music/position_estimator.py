@@ -21,7 +21,7 @@ from typing import Optional, List, Dict, Tuple, Any
 
 from app.music.chart_alignment import ChartAlignment, ChartPosition
 from app.music.chord_chart import ChordChart, parse_chord
-from app.music.theory import note_to_pc
+from app.music.theory import note_to_pc, get_chord_notes, PITCH_CLASSES
 from app.music.musical_clock import MusicalClock
 from app.analysis.music_structure_analyzer import MusicStructureAnalyzer
 from app.music.prediction_engine import PredictionEngine
@@ -103,6 +103,7 @@ class PositionEstimator:
         # Histórico recente de acordes detectados e esperados (últimos 8)
         self._recent_detected: deque = deque(maxlen=8)
         self._recent_expected: deque = deque(maxlen=8)
+        self._recent_notes: deque = deque(maxlen=5)
 
         # Detector de transposição/capotraste global entre a cifra e a execução
         self._transposition = TranspositionTracker()
@@ -129,6 +130,7 @@ class PositionEstimator:
         self._consecutive_mismatch_seconds = 0.0
         self._recent_detected.clear()
         self._recent_expected.clear()
+        self._recent_notes.clear()
         self._transposition.reset()
         self._bar_offset = 0
         self._current_estimated_position = None
@@ -190,6 +192,7 @@ class PositionEstimator:
     def set_alignment(self, alignment: ChartAlignment) -> None:
         """Atualiza o alinhamento estruturado da cifra."""
         self._alignment = alignment
+        self._recent_notes.clear()
 
     def set_capo(self, semitones: int) -> None:
         """Informa o capotraste (semitons) para comparar o áudio soante com os shapes escritos."""
@@ -207,7 +210,9 @@ class PositionEstimator:
         timestamp: float,
         detected_chord: str = "--",
         detected_confidence: float = 0.0,
-        detected_key: str = "--"
+        detected_key: str = "--",
+        detected_note: str = "--",
+        note_confidence: float = 0.0,
     ) -> ChartPosition:
         """Atualiza a estimativa de posição: o ÁUDIO localiza onde estamos na cifra."""
         # 1. Tempo contínuo (o relógio dá o avanço suave; o áudio decide o LUGAR)
@@ -242,12 +247,18 @@ class PositionEstimator:
                 )
                 if strong_enough and distance >= 1:
                     self._bar_offset = clock_bar - loc_bar
+                    self._recent_notes.clear()
                     localize_note = (
                         f"Localizado pelo áudio no Comp. {loc_bar} "
                         f"({loc_len} acordes, {int(loc_score * 100)}%)"
                     )
 
         current_bar = max(1, clock_bar - self._bar_offset)
+        note_match = self._locate_note_sequence(timestamp, detected_note, note_confidence, current_bar)
+        if note_match is not None:
+            current_bar = note_match
+            self._bar_offset = clock_bar - current_bar
+            localize_note = f"Localizado por sequência de notas no Comp. {current_bar}"
 
         # Consulta posição nominal na cifra pelo compasso localizado
         nominal_pos = self._alignment.get_position_at(
@@ -469,6 +480,64 @@ class PositionEstimator:
                 if not seq or seq[-1][1] != ch:
                     seq.append((b, ch, parse_chord(self._expected_as_sounding(ch))))
         return seq
+
+    @staticmethod
+    def _note_score(note_pc: int, chord: str) -> float:
+        """Compatibilidade da nota com o acorde; notas de passagem não são prova de erro."""
+        symbol = parse_chord(chord)
+        root_pc = note_to_pc(symbol.root)
+        if root_pc < 0:
+            return 0.1
+        if note_pc == root_pc:
+            return 1.0
+        quality = symbol.quality
+        tones = {note_to_pc(n) for n in get_chord_notes(PITCH_CLASSES[root_pc], quality)}
+        if symbol.extension and "7" in symbol.extension:
+            tones.add((root_pc + (11 if "maj7" in symbol.extension.lower() else 10)) % 12)
+        if note_pc in tones:
+            return 0.88
+        return 0.15
+
+    def _locate_note_sequence(self, timestamp: float, note: str, confidence: float,
+                              near_bar: int) -> Optional[int]:
+        """Compara notas distintas com candidatos em toda a cifra, sem saltar em empates."""
+        pc = note_to_pc(note) if confidence >= 0.7 else -1
+        if pc < 0:
+            return None
+        if self._recent_notes and timestamp - self._recent_notes[-1][1] > 3.0:
+            self._recent_notes.clear()
+        if self._recent_notes and (pc == self._recent_notes[-1][0]
+                                   or timestamp - self._recent_notes[-1][1] < 0.08):
+            return None
+        self._recent_notes.append((pc, timestamp))
+        if len(self._recent_notes) < 3:
+            return None
+        notes = [item[0] for item in list(self._recent_notes)[-4:]]
+        bars = [self._expected_as_sounding(self._alignment.get_position_at(b).current_chord)
+                for b in range(1, self._alignment.total_bars + 1)]
+        if not bars:
+            return None
+        # Cada nota pode pertencer ao mesmo acorde ou ao compasso seguinte.
+        # O melhor caminho é calculado para cada possível compasso final.
+        scores = [self._note_score(notes[0], chord) for chord in bars]
+        for note_pc in notes[1:]:
+            scores = [self._note_score(note_pc, chord) +
+                      max(scores[i], scores[i - 1] if i else -1.0)
+                      for i, chord in enumerate(bars)]
+        ranked = sorted(enumerate((s / len(notes) for s in scores), 1),
+                        key=lambda item: (-item[1], abs(item[0] - near_bar)))
+        best_bar, best_score = ranked[0]
+        if best_score < 0.82 or abs(best_bar - near_bar) <= 2:
+            return None
+        # Empates em refrões/versos repetidos não autorizam salto remoto.
+        alternatives = [score for bar, score in ranked[1:] if abs(bar - best_bar) > 2]
+        if alternatives and best_score - max(alternatives) < 0.12:
+            return None
+        current_score = scores[min(near_bar, len(scores)) - 1] / len(notes)
+        if best_score - current_score < 0.18:
+            return None
+        self._recent_notes.clear()
+        return best_bar
 
     def _global_localize(self, near_bar: int = 1):
         """Procura NO DOCUMENTO INTEIRO onde a progressão detectada recentemente encaixa.
