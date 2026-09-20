@@ -36,6 +36,12 @@ class MusicalContext:
     # ============================================================
     chord: str = "--"                           # Cifra completa (ex: "C", "G/B", "Am")
     next_expected_chord: str = "--"             # Acorde previsto para o próximo compasso
+    next_change_bar: int = 0                   # Próximo compasso de mudança, 0 se desconhecido
+    next_change_beat: int = 1
+    next_expected_section: str = "--"
+    confirmed_variation_chord: str = "--"
+    position_generation: int = 0               # Incrementado quando a projeção da cifra muda
+    chart_available: bool = False
     current_chord: str = "--"                   # Alias de compatibilidade
     chord_root: str = "--"                      # Tônica do acorde (ex: "C")
     chord_quality: str = "--"                   # Qualidade (ex: "major", "minor")
@@ -148,6 +154,13 @@ class MusicalContext:
         self.chroma_vector = [0.0] * 12
 
         self.chord = "--"
+        self.next_expected_chord = "--"
+        self.next_change_bar = 0
+        self.next_change_beat = 1
+        self.next_expected_section = "--"
+        self.confirmed_variation_chord = "--"
+        self.position_generation = 0
+        self.chart_available = False
         self.current_chord = "--"
         self.chord_root = "--"
         self.chord_quality = "--"

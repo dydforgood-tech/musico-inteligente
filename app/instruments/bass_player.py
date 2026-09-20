@@ -47,6 +47,8 @@ class BassPlayer(VirtualInstrument):
         self._current_event: Optional[BassNoteEvent] = None
         self._last_triggered_beat: Optional[Tuple[int, int]] = None
         self._last_chord: str = "--"
+        self._last_scheduled_time: Optional[float] = None
+        self._generation_id: Optional[int] = None
 
         # Histórico recente para modo debug e UI (ring-buffer)
         self._recent_events: collections.deque = collections.deque(maxlen=30)
@@ -107,6 +109,21 @@ class BassPlayer(VirtualInstrument):
     def current_event(self) -> Optional[BassNoteEvent]:
         return self._current_event
 
+    @property
+    def lookahead(self) -> Dict:
+        """Projeção fornecida pela sessão; o baixo não recalcula posição na cifra."""
+        ctx = self._last_context
+        if ctx is None:
+            return {}
+        return {
+            "current_chord": ctx.chord, "next_chord": ctx.next_expected_chord,
+            "current_bar": ctx.bar, "current_beat": ctx.beat,
+            "next_change_position": (ctx.next_change_bar, ctx.next_change_beat),
+            "current_section": ctx.current_section,
+            "next_section": ctx.next_expected_section,
+            "tracking_confidence": ctx.position_confidence,
+        }
+
     def get_recent_events(self) -> List[BassNoteEvent]:
         """Retorna lista dos eventos de baixo recentes."""
         return list(self._recent_events)
@@ -157,6 +174,8 @@ class BassPlayer(VirtualInstrument):
         self._current_event = None
         self._last_triggered_beat = None
         self._last_chord = "--"
+        self._last_scheduled_time = None
+        self._generation_id = None
         self._last_context = None
         self._recent_events.clear()
 
@@ -275,6 +294,12 @@ class BassPlayer(VirtualInstrument):
 
     def _schedule_next_beat(self, context: MusicalContext) -> Optional[BassNoteEvent]:
         """Agenda no sintetizador a próxima batida; nunca recupera batidas antigas."""
+        if context.position_generation != self._generation_id:
+            self._synthesizer.set_generation(context.position_generation)
+            self._generation_id = context.position_generation
+            self._last_triggered_beat = None
+            self._last_chord = "--"
+            self._last_scheduled_time = None
         bpm = context.bpm if context.bpm > 0 else 120.0
         beat_duration = 60.0 / bpm
         beats = max(1, int(context.meter.split('/')[0]))
@@ -290,9 +315,20 @@ class BassPlayer(VirtualInstrument):
             beat = 1
             bar += 1
         key = (bar, beat)
-        next_chord = (context.next_expected_chord if bar > context.bar and
-                      context.next_expected_chord != "--" else context.chord)
-        if key == self._last_triggered_beat and next_chord == self._last_chord:
+        chart_changes_here = (bar > context.bar and context.next_expected_chord != "--" and
+                              (context.next_change_bar == 0 or bar >= context.next_change_bar))
+        next_chord = context.next_expected_chord if chart_changes_here else context.chord
+        source = "chart" if context.chart_available or context.next_expected_chord != "--" else "audio"
+        if (context.confirmed_variation_chord != "--" and
+                (bar == context.bar or
+                 (context.tracking_state in ("UNCERTAIN", "LOST") and
+                  context.position_confidence < 0.65))):
+            next_chord = context.confirmed_variation_chord
+            source = "audio-confirmed"
+        same_key = key == self._last_triggered_beat
+        if (same_key and next_chord == self._last_chord and
+                self._last_scheduled_time is not None and
+                abs(start_time - self._last_scheduled_time) < 0.005):
             return None
 
         decision_context = context
@@ -311,6 +347,7 @@ class BassPlayer(VirtualInstrument):
         step = next((item for item in steps if item[0] == beat), None)
         self._last_triggered_beat = key
         self._last_chord = next_chord
+        self._last_scheduled_time = start_time
         if step is None:
             return None
         _, note_name, midi_note, reason = step
@@ -320,7 +357,11 @@ class BassPlayer(VirtualInstrument):
                               start_time=round(start_time, 4), duration=round(duration, 4),
                               velocity=velocity, beat=beat, bar=bar,
                               confidence=decision.confidence, reason=reason)
-        self._synthesizer.schedule_note(key, start_time, midi_note, velocity, duration)
+        self._synthesizer.schedule_note(key, start_time, midi_note, velocity, duration,
+                                        source=source, confidence=context.position_confidence,
+                                        generation_id=context.position_generation, note=note_name)
+        if same_key and self._recent_events and (self._recent_events[-1].bar, self._recent_events[-1].beat) == key:
+            self._recent_events.pop()
         self._recent_events.append(event)
         self._current_event = event
         return event

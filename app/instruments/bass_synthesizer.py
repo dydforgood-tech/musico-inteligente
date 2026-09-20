@@ -9,11 +9,25 @@ Responsável por sintetizar som de contrabaixo elétrico puro e quente em tempo 
 """
 
 import threading
+from dataclasses import dataclass
 from typing import List, Optional
 import numpy as np
 
 from app.music.theory import midi_to_hz
 from app.music.constants import BASS_DEFAULT_VOLUME
+
+
+@dataclass(frozen=True)
+class ScheduledBassNote:
+    scheduled_beat: tuple
+    scheduled_time: float
+    midi_note: int
+    velocity: int
+    duration: float
+    source: str
+    confidence: float
+    generation_id: int
+    note: str = "--"
 
 
 class ActiveVoice:
@@ -98,6 +112,7 @@ class BassSynthesizer:
         self._lock = threading.Lock()
         self._voices: List[ActiveVoice] = []
         self._scheduled = {}  # chave (compasso, beat) -> (timestamp, midi, velocidade, duração)
+        self._generation_id = 0
 
     @property
     def volume(self) -> float:
@@ -126,14 +141,36 @@ class BassSynthesizer:
         with self._lock:
             self._voices.clear()
             self._scheduled.clear()
+            self._generation_id = 0
+
+    @property
+    def scheduled_events(self) -> List[ScheduledBassNote]:
+        with self._lock:
+            return sorted(self._scheduled.values(), key=lambda event: event.scheduled_time)
+
+    def set_generation(self, generation_id: int) -> None:
+        """Invalida a projeção antiga sem cortar notas que já estão soando."""
+        with self._lock:
+            if generation_id > self._generation_id:
+                self._scheduled.clear()
+                self._generation_id = generation_id
 
     def schedule_note(self, key: tuple, start_time: float, midi_note: int,
-                      velocity: int, duration: float) -> None:
+                      velocity: int, duration: float, source: str = "chart",
+                      confidence: float = 1.0, generation_id: int = 0,
+                      note: str = "--") -> None:
         """Arma uma nota para a linha de áudio; atualizações substituem a previsão anterior."""
         if not self._enabled or midi_note <= 0:
             return
         with self._lock:
-            self._scheduled[key] = (start_time, midi_note, velocity, duration)
+            if generation_id != self._generation_id:
+                return
+            self._scheduled[key] = ScheduledBassNote(
+                key, start_time, midi_note, velocity, duration,
+                source, confidence, generation_id, note)
+            if len(self._scheduled) > 8:
+                oldest = min(self._scheduled, key=lambda item: self._scheduled[item].scheduled_time)
+                del self._scheduled[oldest]
 
     def trigger_note(self, midi_note: int, velocity: int = 100, duration: float = 0.5) -> None:
         """Dispara uma nova nota de baixo imediatamente."""
@@ -176,10 +213,13 @@ class BassSynthesizer:
                     active_voices.append(voice)
             if current_pos > 0 or self._scheduled:
                 end_pos = current_pos + frames / sample_rate
-                due = sorted((key, item) for key, item in self._scheduled.items()
-                             if item[0] < end_pos)
-                for key, (start, midi, velocity, duration) in due:
+                due = sorted(((key, item) for key, item in self._scheduled.items()
+                              if item.scheduled_time < end_pos),
+                             key=lambda pair: pair[1].scheduled_time)
+                for key, event in due:
                     del self._scheduled[key]
+                    start, midi, velocity, duration = (event.scheduled_time, event.midi_note,
+                                                       event.velocity, event.duration)
                     # Evento vencido não entra no bloco e nunca é disparado em rajada.
                     if start < current_pos - 0.035:
                         continue

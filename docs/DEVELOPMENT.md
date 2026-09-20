@@ -54,7 +54,7 @@ Execute na raiz:
 python -B -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-A suíte atual passou em 230 testes, incluindo 17 regressões da posição musical, 6 do seguimento por notas e 14 do tempo adaptativo.
+A suíte atual passou em 242 testes, incluindo 17 regressões da posição musical, 6 do seguimento por notas, 14 do tempo adaptativo e 12 do baixo preditivo.
 A suíte inclui um teste Tkinter e precisa de sessão gráfica; em Linux sem tela,
 use um display virtual. A passagem dos testes não substitui audição e testes de hardware.
 As amostras WAV incluídas são geradas pelo próprio projeto.
@@ -139,3 +139,28 @@ onsets especializado para entrada ao vivo polifônica, e o caminho de análise
 da UI ainda depende da cadência de atualização Tkinter. Testes com interface
 de áudio e instrumento real são necessários para medir latência de ponta a
 ponta, falsos ataques e calibrar os limiares.
+
+## Agendamento preditivo do baixo pela cifra
+
+A `ChartPosition` já informa o próximo acorde e quantos compassos faltam para
+a mudança. A `SongSession` publica no `MusicalContext` o compasso/tempo dessa
+mudança, seção seguinte, confiança de tracking e uma geração da posição. O
+`BassPlayer` consulta esse look-ahead e prepara a decisão da próxima batida;
+o `BassSynthesizer` mantém uma fila pequena com nota, horário, origem,
+confiança e geração. Somente o callback de áudio executa a nota no horário
+agendado. Um acorde sustentado não muda um compasso cedo.
+
+Quando o `PositionEstimator` reancora, a cifra é alterada ou o transporte busca
+outro timestamp, a geração avança
+e os eventos futuros da geração anterior são descartados sem cortar a nota
+que já está soando. Uma mudança de BPM pode corrigir o horário do mesmo
+evento ainda pendente. A fusão continua dando prioridade à cifra: um acorde
+detectado isolado não altera a previsão. Uma divergência sustentada, confirmada
+pela `ChartAudioFusion` com confiança de áudio suficiente, pode orientar os
+próximos tempos; na virada do compasso a cifra retoma a prioridade, exceto
+quando a localização está incerta e sua confiança caiu.
+
+O agendamento conhece mudanças em fronteiras de compassos porque o modelo
+atual de `ChartAlignment` ainda representa a duração de cada acorde em
+compassos inteiros. Mudanças de acorde dentro do compasso e subdivisões
+rítmicas exigem ampliar a linha temporal da cifra.

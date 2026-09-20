@@ -96,6 +96,7 @@ class SongSession:
             pass # Pode ser deserializado no futuro
 
         # 7. Estado Instantâneo Consolidado
+        self._position_generation = 0
         self._current_chart_pos: ChartPosition = self._position_estimator.refresh_position()
         self._current_fused_state: FusedMusicalState = FusedMusicalState(
             expected_chord=self._current_chart_pos.current_chord,
@@ -254,6 +255,7 @@ class SongSession:
 
     def reset(self) -> None:
         """Reinicia os relógios, fusão e contextos para o início da música (t=0.0)."""
+        self._position_generation += 1
         self._clock.bpm = self._song.performance_settings.bpm_override or self._song.bpm
         self._clock.reset()
         self._context.reset()
@@ -292,6 +294,9 @@ class SongSession:
         tempo_result: Optional[TempoResult] = None,
     ) -> FusedMusicalState:
         """Tempo bruto → estimador → snapshot musical → todos os consumidores."""
+        if timestamp < self._clock.elapsed_time - 0.01:
+            # Seek da fonte invalida o horário de qualquer evento preparado.
+            self._position_generation += 1
         manual_bpm = self._song.performance_settings.bpm_override
         initial_observation = self._clock.elapsed_time == 0.0 and self._clock.tempo_confidence == 0.0
         bpm_input = (manual_bpm or
@@ -301,11 +306,14 @@ class SongSession:
             timestamp, bpm=bpm_input,
             beat_timestamp=tempo_result.beat_timestamp if tempo_result else None,
             observation_confidence=tempo_result.confidence if tempo_result else 0.0)
+        old_offset = self._position_estimator.bar_offset
         self._current_chart_pos = self._position_estimator.update(
             timestamp=timestamp, detected_chord=detected_chord,
             detected_confidence=detected_confidence, detected_key=detected_key,
             detected_note=source_context.note if source_context is not None else "--",
             note_confidence=source_context.note_confidence if source_context is not None else 0.0)
+        if self._position_estimator.bar_offset != old_offset:
+            self._position_generation += 1
         return self._publish_position(detected_chord, detected_confidence, detected_key, source_context)
 
     def _publish_position(self, detected_chord: str = "--", detected_confidence: float = 0.0,
@@ -344,6 +352,14 @@ class SongSession:
         ctx.position_confidence = position.confidence
         ctx.chord = state.effective_chord
         ctx.next_expected_chord = position.next_chord
+        ctx.next_change_bar = (position.current_bar + position.bars_until_chord_change
+                               if position.next_chord != "--" and position.bars_until_chord_change > 0 else 0)
+        ctx.next_change_beat = 1
+        ctx.next_expected_section = position.next_section_name
+        ctx.position_generation = self._position_generation
+        ctx.chart_available = bool(self._chart.sections and position.current_chord != "--")
+        ctx.confirmed_variation_chord = (detected_chord if state.confirmed_variation
+                                         and detected_confidence >= 0.85 else "--")
         ctx.chord_confidence = state.confidence
         if previous != ctx.chord or timestamp < previous_time:
             ctx.previous_chord = previous
@@ -431,12 +447,14 @@ class SongSession:
         self._song.key = target_key
 
         # Reavalia a posição atual sob a nova cifra
+        self._position_generation += 1
         self._current_chart_pos = self._position_estimator.refresh_position()
         self._publish_position()
         return self._chart
 
     def seek_to_bar(self, bar: int) -> ChartPosition:
         """Salta a reprodução/estudo diretamente para um compasso específico."""
+        self._position_generation += 1
         self._current_chart_pos = self._position_estimator.seek_to_bar(bar)
         self._publish_position()
         return self._current_chart_pos
@@ -534,5 +552,6 @@ class SongSession:
         self._alignment = ChartAlignment(self._chart)
         self._position_estimator.set_alignment(self._alignment)
         self._position_estimator.set_capo(self._chart.capo_semitones)
+        self._position_generation += 1
         self._current_chart_pos = self._position_estimator.refresh_position()
         self._publish_position()
