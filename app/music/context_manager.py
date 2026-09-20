@@ -172,10 +172,12 @@ class MusicalContextManager:
 
 
         # 4. Relógio Musical (MusicalClock) e Posição Rítmica
-        bpm_val = tempo_res.bpm if (tempo_res and tempo_res.bpm > 0) else ctx.bpm
-        is_beat_val = tempo_res.is_beat if tempo_res else None
-
-        self._clock.update(timestamp=timestamp, bpm=bpm_val, external_is_beat=is_beat_val)
+        bpm_val = tempo_res.bpm if (tempo_res and tempo_res.bpm > 0
+                                    and self._clock.tracking_state != "TRACKING") else None
+        pulse = tempo_res.beat_timestamp if tempo_res else None
+        self._clock.update(timestamp=timestamp, bpm=bpm_val,
+                           beat_timestamp=pulse,
+                           observation_confidence=tempo_res.confidence if tempo_res else 0.0)
 
         ctx.bpm = self._clock.bpm
         ctx.meter = self._clock.meter
@@ -187,6 +189,12 @@ class MusicalContextManager:
         ctx.beat = ctx.clock_beat
         ctx.beat_position = self._clock.beat_position
         ctx.is_beat = self._clock.is_beat
+        ctx.initial_bpm = self._clock.initial_bpm
+        ctx.target_bpm = self._clock.target_bpm
+        ctx.tempo_confidence = self._clock.tempo_confidence
+        ctx.phase_confidence = self._clock.phase_confidence
+        ctx.phase_error_ms = self._clock.phase_error_ms
+        ctx.tempo_tracking_state = self._clock.tracking_state
 
         # 5. Métricas de Latência Quadripartida
         stab_delay = self._chord_stabilizer.stabilization_delay_ms

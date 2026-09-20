@@ -35,6 +35,7 @@ class MusicalContext:
     # 3. Análise Harmônica e Acorde Atual
     # ============================================================
     chord: str = "--"                           # Cifra completa (ex: "C", "G/B", "Am")
+    next_expected_chord: str = "--"             # Acorde previsto para o próximo compasso
     current_chord: str = "--"                   # Alias de compatibilidade
     chord_root: str = "--"                      # Tônica do acorde (ex: "C")
     chord_quality: str = "--"                   # Qualidade (ex: "major", "minor")
@@ -73,6 +74,12 @@ class MusicalContext:
     meter: str = "4/4"                          # Fórmula de compasso ativa (ex: "4/4", "3/4")
     time_signature: str = "4/4"                 # Alias de compatibilidade
     is_beat: bool = False                       # Pulso no instante atual do clique
+    initial_bpm: float = 120.0
+    target_bpm: float = 120.0
+    tempo_confidence: float = 0.0
+    phase_confidence: float = 0.0
+    phase_error_ms: float = 0.0
+    tempo_tracking_state: str = "UNINITIALIZED"
 
     # ============================================================
     # 6. Confiança Global

@@ -97,6 +97,7 @@ class BassSynthesizer:
         self._enabled = True
         self._lock = threading.Lock()
         self._voices: List[ActiveVoice] = []
+        self._scheduled = {}  # chave (compasso, beat) -> (timestamp, midi, velocidade, duração)
 
     @property
     def volume(self) -> float:
@@ -118,11 +119,21 @@ class BassSynthesizer:
         with self._lock:
             self._sample_rate = sr
             self._voices.clear()
+            self._scheduled.clear()
 
     def clear(self) -> None:
         """Interrompe todas as vozes ativas."""
         with self._lock:
             self._voices.clear()
+            self._scheduled.clear()
+
+    def schedule_note(self, key: tuple, start_time: float, midi_note: int,
+                      velocity: int, duration: float) -> None:
+        """Arma uma nota para a linha de áudio; atualizações substituem a previsão anterior."""
+        if not self._enabled or midi_note <= 0:
+            return
+        with self._lock:
+            self._scheduled[key] = (start_time, midi_note, velocity, duration)
 
     def trigger_note(self, midi_note: int, velocity: int = 100, duration: float = 0.5) -> None:
         """Dispara uma nova nota de baixo imediatamente."""
@@ -160,10 +171,25 @@ class BassSynthesizer:
         with self._lock:
             active_voices = []
             for voice in self._voices:
-                chunk = voice.render(frames)
-                mono_mix += chunk
+                mono_mix += voice.render(frames)
                 if not voice.is_finished:
                     active_voices.append(voice)
+            if current_pos > 0 or self._scheduled:
+                end_pos = current_pos + frames / sample_rate
+                due = sorted((key, item) for key, item in self._scheduled.items()
+                             if item[0] < end_pos)
+                for key, (start, midi, velocity, duration) in due:
+                    del self._scheduled[key]
+                    # Evento vencido não entra no bloco e nunca é disparado em rajada.
+                    if start < current_pos - 0.035:
+                        continue
+                    offset = max(0, round((start - current_pos) * sample_rate))
+                    if offset >= frames:
+                        continue
+                    voice = ActiveVoice(midi_to_hz(midi), velocity, duration, sample_rate)
+                    mono_mix[offset:] += voice.render(frames - offset)
+                    if not voice.is_finished:
+                        active_voices.append(voice)
             self._voices = active_voices
 
         # Aplica volume master do baixo com proteção estrita contra saturação/clipping

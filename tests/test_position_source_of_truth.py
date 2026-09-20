@@ -169,7 +169,8 @@ class TestPositionSourceOfTruth(unittest.TestCase):
         registry.register_player("observer", observer)
         events = registry.dispatch_context(session.context)
         self.assertEqual(events["bass"].bar, 36)
-        self.assertEqual(events["bass"].beat, session.current_beat)
+        self.assertEqual(events["bass"].beat,
+                         session.current_beat % session.clock.beats_per_bar + 1)
         self.assertIs(observer.on_musical_context.call_args.args[0], session.context)
         self.assertEqual(bass.current_decision.chord, session.current_chord)
 

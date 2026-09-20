@@ -11,6 +11,7 @@ Orquestrador central do baixista virtual:
 
 from typing import Optional, List, Dict, Tuple
 import collections
+import copy
 
 from app.instruments.base import VirtualInstrument
 from app.instruments.bass_model import BassNoteEvent, BassDecision, BassPatternType
@@ -19,6 +20,7 @@ from app.instruments.bass_pattern import BassPatternGenerator
 from app.instruments.bass_performance import BassPerformanceEngine
 from app.instruments.bass_synthesizer import BassSynthesizer
 from app.music.musical_context import MusicalContext
+from app.music.chord_chart import parse_chord
 from app.music.constants import BASS_DEFAULT_VOLUME
 
 
@@ -195,6 +197,8 @@ class BassPlayer(VirtualInstrument):
             return None
 
         self._last_context = context
+        if context.tempo_tracking_state != "UNINITIALIZED":
+            return self._schedule_next_beat(context)
 
         # Rastreia compasso e tempo atuais
         bar = max(1, context.bar)
@@ -268,3 +272,55 @@ class BassPlayer(VirtualInstrument):
         self._current_event = ev
 
         return ev
+
+    def _schedule_next_beat(self, context: MusicalContext) -> Optional[BassNoteEvent]:
+        """Agenda no sintetizador a próxima batida; nunca recupera batidas antigas."""
+        bpm = context.bpm if context.bpm > 0 else 120.0
+        beat_duration = 60.0 / bpm
+        beats = max(1, int(context.meter.split('/')[0]))
+        phase = max(0.0, min(1.0, context.beat_position))
+        bar, beat = max(1, context.bar), max(1, context.beat)
+        current_start = context.timestamp - phase * beat_duration
+        if context.timestamp - current_start > 0.015:
+            beat += 1
+            start_time = current_start + beat_duration
+        else:
+            start_time = current_start
+        if beat > beats:
+            beat = 1
+            bar += 1
+        key = (bar, beat)
+        next_chord = (context.next_expected_chord if bar > context.bar and
+                      context.next_expected_chord != "--" else context.chord)
+        if key == self._last_triggered_beat and next_chord == self._last_chord:
+            return None
+
+        decision_context = context
+        if next_chord != context.chord:
+            decision_context = copy.copy(context)
+            decision_context.chord = next_chord
+            symbol = parse_chord(next_chord)
+            decision_context.chord_root = symbol.root
+            decision_context.chord_quality = symbol.quality
+            decision_context.bass_note = symbol.bass_note or symbol.root
+            decision_context.inversion = "slash" if symbol.bass_note and symbol.bass_note != symbol.root else "root"
+        decision = self._decision_engine.decide(decision_context, pattern_override=self._pattern_override)
+        self._current_decision = decision
+        steps = self._pattern_generator.generate_pattern(decision, beats=beats,
+                                                         chord_duration_beats=float(beats))
+        step = next((item for item in steps if item[0] == beat), None)
+        self._last_triggered_beat = key
+        self._last_chord = next_chord
+        if step is None:
+            return None
+        _, note_name, midi_note, reason = step
+        duration = beat_duration * (beats * 0.95 if decision.pattern_type == BassPatternType.SUSTAINED else 0.85)
+        velocity = 100 if beat == 1 else 92 if beat == 3 else 85
+        event = BassNoteEvent(note=note_name, midi_note=midi_note,
+                              start_time=round(start_time, 4), duration=round(duration, 4),
+                              velocity=velocity, beat=beat, bar=bar,
+                              confidence=decision.confidence, reason=reason)
+        self._synthesizer.schedule_note(key, start_time, midi_note, velocity, duration)
+        self._recent_events.append(event)
+        self._current_event = event
+        return event

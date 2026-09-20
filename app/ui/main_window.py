@@ -2822,7 +2822,8 @@ class MainWindow:
         if self._follow_mode_enabled:
             self._highlight_chart_position(session.chart_position)
         if getattr(self, "_bass_debug_visible", False):
-            self.lbl_status_msg.config(text=session.format_position_diagnostics())
+            self.lbl_status_msg.config(text=session.format_position_diagnostics() + " | " +
+                                       session.format_tempo_diagnostics())
 
 
     def _on_close(self) -> None:

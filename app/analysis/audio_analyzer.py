@@ -218,6 +218,7 @@ class AudioAnalyzer:
         """Reinicia acumuladores de histórico, relógio e instrumentos ao carregar nova música ou dar stop."""
         with self._lock:
             self._active_session = None
+            self._tempo_detector.reset()
             self._key_detector.reset()
             self._harmonic_analyzer.chord_history.clear()
             self._context_manager.reset()
@@ -270,6 +271,7 @@ class AudioAnalyzer:
             key_res: KeyResult = self._key_detector.estimate_key(key_chroma, timestamp=timestamp)
 
             # 5. Rastreamento de Andamento & Batida
+            self._tempo_detector.observe_chunk(audio_chunk, sample_rate, timestamp)
             tempo_res: TempoResult = self._tempo_detector.get_tempo_at_time(timestamp)
 
             # 6. Finalizar medição de tempo DSP da CPU
@@ -293,7 +295,7 @@ class AudioAnalyzer:
                 session.update_audio_tick(
                     timestamp=timestamp, detected_chord=ctx.chord,
                     detected_confidence=ctx.chord_confidence, detected_key=ctx.key,
-                    detected_bpm=ctx.bpm, source_context=ctx)
+                    detected_bpm=ctx.bpm, source_context=ctx, tempo_result=tempo_res)
                 ctx = session.context
             else:
                 # No modo livre, não há cifra: coordenadas musicais coincidem com o relógio.

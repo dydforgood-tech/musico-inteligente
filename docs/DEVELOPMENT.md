@@ -54,7 +54,7 @@ Execute na raiz:
 python -B -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-A suíte atual passou em 216 testes, incluindo 17 regressões da posição musical e 6 do seguimento por notas.
+A suíte atual passou em 230 testes, incluindo 17 regressões da posição musical, 6 do seguimento por notas e 14 do tempo adaptativo.
 A suíte inclui um teste Tkinter e precisa de sessão gráfica; em Linux sem tela,
 use um display virtual. A passagem dos testes não substitui audição e testes de hardware.
 As amostras WAV incluídas são geradas pelo próprio projeto.
@@ -112,3 +112,30 @@ cifra limpam a sequência. O relógio permanece a base do avanço entre evidênc
 Uma cifra descreve acordes, não a melodia exata. Por isso o alinhamento por
 notas é probabilístico e pode se abster; ensaios reais com áudio de referência
 são necessários para calibrar pesos e limiares por instrumento.
+
+## Andamento adaptativo e agendamento do baixo
+
+O `OnsetTempoDetector` oferece timestamps exatos da grade extraída da faixa
+quando ela está disponível. Sem grade, observa ataques energéticos do sinal
+corrente; um `is_beat` calculado da grade sintética nunca é usado como pulso
+observado. O `MusicalClock` existente contém o seguidor de tempo/fase: o primeiro
+ataque apenas arma uma hipótese, intervalos plausíveis ajustam `target_bpm`
+por média exponencial ponderada pela confiança, e `current_bpm` converge a ela
+com constante de tempo de 1,25 s. Um PLL simples corrige parcialmente o erro
+de fase a cada pulso. Eventos isolados discrepantes não alteram o BPM; após
+perda da detecção, o relógio avança em `HOLDOVER` e recupera gradualmente.
+
+A `SongSession` publica o relógio no `MusicalContext` sem alterar a
+responsabilidade de localização do `PositionEstimator`. No modo de sessão,
+`BassPlayer` calcula a próxima batida e agenda o evento com tempo absoluto
+no `BassSynthesizer`; o callback de áudio insere o sinal no sample correto
+e descarta eventos vencidos. No limite do compasso, usa o próximo acorde
+previsto na cifra. A antiga API imediata permanece para contextos avulsos.
+O status de debug mostra BPM inicial/atual/alvo, confiança, fase, erro de
+fase e estado.
+
+A observação simples de energia em blocos não substitui um detector de
+onsets especializado para entrada ao vivo polifônica, e o caminho de análise
+da UI ainda depende da cadência de atualização Tkinter. Testes com interface
+de áudio e instrumento real são necessários para medir latência de ponta a
+ponta, falsos ataques e calibrar os limiares.

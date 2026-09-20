@@ -25,6 +25,7 @@ class TempoResult:
     beat_position: float = 0.0      # Posição fracionária no compasso [0.0 a 1.0]
     time_signature: str = "4/4"     # Fórmula de compasso estimada
     confidence: float = 0.0         # Confiança da periodicidade rítmica
+    beat_timestamp: Optional[float] = None  # Pulso realmente observado, não a grade prevista
 
 
 class TempoDetector(ABC):
@@ -62,6 +63,8 @@ class OnsetTempoDetector(TempoDetector):
         self._beat_times: np.ndarray = np.array([], dtype=np.float32)
         self._last_beat_idx: int = -1
         self._beats_per_measure: int = 4
+        self._previous_energy: float = 0.0
+        self._live_pulse: Optional[float] = None
 
     @property
     def bpm(self) -> float:
@@ -75,6 +78,18 @@ class OnsetTempoDetector(TempoDetector):
         self._bpm = 0.0
         self._beat_times = np.array([], dtype=np.float32)
         self._last_beat_idx = -1
+        self._previous_energy = 0.0
+        self._live_pulse = None
+
+    def observe_chunk(self, audio_data: np.ndarray, sample_rate: int, timestamp: float) -> None:
+        """Detecta ataques do sinal atual quando não há grade pré-analisada."""
+        if len(self._beat_times) or sample_rate <= 0 or len(audio_data) == 0:
+            return
+        energy = float(np.sqrt(np.mean(np.square(np.asarray(audio_data, dtype=np.float64)))))
+        if (energy > 0.025 and energy > max(0.012, self._previous_energy) * 1.7
+                and (self._live_pulse is None or timestamp - self._live_pulse > 0.25)):
+            self._live_pulse = timestamp
+        self._previous_energy = 0.65 * self._previous_energy + 0.35 * energy
 
     def analyze_audio(self, audio_data: np.ndarray, sample_rate: int) -> float:
         """Analisa o sinal completo para extrair o BPM global e a grade precisa de tempos."""
@@ -106,7 +121,10 @@ class OnsetTempoDetector(TempoDetector):
     def get_tempo_at_time(self, timestamp: float, tolerance_sec: float = 0.075) -> TempoResult:
         """Determina se o instante atual de reprodução coincide com um pulso de batida."""
         if self._bpm <= 0.0:
-            return TempoResult(bpm=0.0, is_beat=False, beat_number=1, beat_position=0.0)
+            pulse = self._live_pulse if self._live_pulse is not None and abs(timestamp - self._live_pulse) <= tolerance_sec else None
+            return TempoResult(bpm=0.0, is_beat=pulse is not None, beat_number=1,
+                               beat_position=0.0, confidence=0.75 if pulse is not None else 0.0,
+                               beat_timestamp=pulse)
 
         # Se tivermos a grade pré-calculada
         if len(self._beat_times) > 0:
@@ -128,7 +146,8 @@ class OnsetTempoDetector(TempoDetector):
                 beat_number=beat_number,
                 beat_position=float(beat_pos),
                 time_signature="4/4",
-                confidence=0.88
+                confidence=0.88,
+                beat_timestamp=float(self._beat_times[closest_idx]) if is_beat else None,
             )
 
         # Caso contrário (estimativa analítica por tempo)
@@ -145,5 +164,7 @@ class OnsetTempoDetector(TempoDetector):
             beat_number=current_beat,
             beat_position=float(beat_pos),
             time_signature="4/4",
-            confidence=0.75
+            confidence=0.75,
+            beat_timestamp=self._live_pulse if self._live_pulse is not None
+            and abs(timestamp - self._live_pulse) <= tolerance_sec else None,
         )

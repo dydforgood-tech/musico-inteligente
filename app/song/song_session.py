@@ -20,6 +20,7 @@ from app.analysis.music_structure_analyzer import MusicStructureAnalyzer
 from app.music.pattern_memory import PatternMemory
 from app.music.prediction_engine import PredictionEngine, MusicPrediction
 from app.music.position_estimator import PositionEstimator, TrackingState, EstimatedPosition
+from app.analysis.tempo_detector import TempoResult
 
 
 class SongSession:
@@ -253,6 +254,7 @@ class SongSession:
 
     def reset(self) -> None:
         """Reinicia os relógios, fusão e contextos para o início da música (t=0.0)."""
+        self._clock.bpm = self._song.performance_settings.bpm_override or self._song.bpm
         self._clock.reset()
         self._context.reset()
         self._context.bpm = self._clock.bpm
@@ -287,11 +289,18 @@ class SongSession:
         detected_key: str = "--",
         detected_bpm: float = 0.0,
         source_context: Optional[MusicalContext] = None,
+        tempo_result: Optional[TempoResult] = None,
     ) -> FusedMusicalState:
         """Tempo bruto → estimador → snapshot musical → todos os consumidores."""
+        manual_bpm = self._song.performance_settings.bpm_override
+        initial_observation = self._clock.elapsed_time == 0.0 and self._clock.tempo_confidence == 0.0
+        bpm_input = (manual_bpm or
+                     (detected_bpm if detected_bpm > 0 and
+                      (tempo_result is None or initial_observation) else None))
         self._clock.update(
-            timestamp, bpm=self._song.performance_settings.bpm_override or
-            (detected_bpm if detected_bpm > 0 else self._clock.bpm))
+            timestamp, bpm=bpm_input,
+            beat_timestamp=tempo_result.beat_timestamp if tempo_result else None,
+            observation_confidence=tempo_result.confidence if tempo_result else 0.0)
         self._current_chart_pos = self._position_estimator.update(
             timestamp=timestamp, detected_chord=detected_chord,
             detected_confidence=detected_confidence, detected_key=detected_key,
@@ -321,6 +330,12 @@ class SongSession:
         ctx.beat = int(position.current_beat)
         ctx.beat_position = position.current_beat - ctx.beat
         ctx.is_beat = self._clock.is_beat
+        ctx.initial_bpm = self._clock.initial_bpm
+        ctx.target_bpm = self._clock.target_bpm
+        ctx.tempo_confidence = self._clock.tempo_confidence
+        ctx.phase_confidence = self._clock.phase_confidence
+        ctx.phase_error_ms = self._clock.phase_error_ms
+        ctx.tempo_tracking_state = self._clock.tracking_state
         ctx.clock_bar = self.clock_bar
         ctx.clock_beat = self.clock_beat
         ctx.bar_offset = self._position_estimator.bar_offset
@@ -328,6 +343,7 @@ class SongSession:
         ctx.tracking_state = position.tracking_state
         ctx.position_confidence = position.confidence
         ctx.chord = state.effective_chord
+        ctx.next_expected_chord = position.next_chord
         ctx.chord_confidence = state.confidence
         if previous != ctx.chord or timestamp < previous_time:
             ctx.previous_chord = previous
@@ -375,6 +391,24 @@ class SongSession:
             f"TRACKING: {data['tracking_state']} | BAR OFFSET: {data['bar_offset']:+d} | "
             f"EXPECTED: {data['expected_chord']} | DETECTED: {data['detected_chord']}"
         )
+
+    def get_tempo_diagnostics(self) -> Dict[str, Any]:
+        return {
+            "initial_bpm": self._clock.initial_bpm,
+            "current_bpm": self._clock.current_bpm,
+            "target_bpm": self._clock.target_bpm,
+            "tempo_confidence": self._clock.tempo_confidence,
+            "beat_phase": self._clock.beat_phase,
+            "phase_error_ms": self._clock.phase_error_ms,
+            "tracking_state": self._clock.tracking_state,
+        }
+
+    def format_tempo_diagnostics(self) -> str:
+        d = self.get_tempo_diagnostics()
+        return (f"INITIAL BPM: {d['initial_bpm']:.1f} | CURRENT BPM: {d['current_bpm']:.1f} | "
+                f"TARGET BPM: {d['target_bpm']:.1f} | TEMPO CONF: {d['tempo_confidence']:.2f} | "
+                f"BEAT PHASE: {d['beat_phase']:.2f} | PHASE ERROR: {d['phase_error_ms']:+.0f} ms | "
+                f"STATE: {d['tracking_state']}")
 
     # ============================================================
     # Navegação Manual (Ensaio / Rehearsal Mode)
