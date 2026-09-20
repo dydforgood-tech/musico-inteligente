@@ -94,6 +94,8 @@ class MusicalContextManager:
         ctx = self._context
         ctx.timestamp = timestamp
         ctx.sample_rate = sample_rate
+        # Sem SongSession não há máquina de performance: o modo livre continua tocando.
+        ctx.performance_state = "PLAYING"
 
         # 1. Atualizar Nota e Pitch Dominante
         if pitch_res is not None and pitch_res.is_voiced and pitch_res.confidence > 0.25:

@@ -8,6 +8,8 @@ Garante isolamento hermético entre trocas de músicas para evitar memory leaks.
 from typing import Optional, Dict, Any, List
 import copy
 from dataclasses import fields
+from dataclasses import replace
+from enum import Enum
 
 from app.song.song import Song
 from app.music.musical_context import MusicalContext
@@ -23,12 +25,26 @@ from app.music.position_estimator import PositionEstimator, TrackingState, Estim
 from app.analysis.tempo_detector import TempoResult
 
 
+class PerformanceState(str, Enum):
+    """Estado da banda; distinto do rastreamento de posição e do relógio."""
+    PLAYING = "PLAYING"
+    UNCERTAIN = "UNCERTAIN"
+    HOLDING = "HOLDING"
+    WAITING = "WAITING"
+    RECOVERING = "RECOVERING"
+    ENDED = "ENDED"
+
+
 class SongSession:
     """Representa a sessão ativa de execução e reprodução de uma Song.
     
     Toda a interface gráfica e os instrumentos virtuais devem consultar esta classe
     para obter a verdade sobre o momento musical presente.
     """
+    _SHORT_PAUSE_SECONDS = 2.5
+    _WAITING_SECONDS = 4.0
+    _END_SILENCE_SECONDS = 8.0
+    _RECOVERY_MIN_SECONDS = 0.30
 
     def __init__(self, song: Song, mode: str = "PLAYBACK"):
         self._song: Song = song
@@ -97,7 +113,12 @@ class SongSession:
 
         # 7. Estado Instantâneo Consolidado
         self._position_generation = 0
+        self._performance_state = PerformanceState.WAITING
+        self._last_activity_time: Optional[float] = None
+        self._recovery_started_at: Optional[float] = None
+        self._recovery_evidence = 0
         self._current_chart_pos: ChartPosition = self._position_estimator.refresh_position()
+        self._last_confident_chart_pos = self._current_chart_pos
         self._current_fused_state: FusedMusicalState = FusedMusicalState(
             expected_chord=self._current_chart_pos.current_chord,
             effective_chord=self._current_chart_pos.current_chord,
@@ -135,6 +156,10 @@ class SongSession:
     @property
     def is_paused(self) -> bool:
         return self._is_paused
+
+    @property
+    def performance_state(self) -> str:
+        return self._performance_state.value
 
     @property
     def clock(self) -> MusicalClock:
@@ -240,6 +265,8 @@ class SongSession:
     def start(self) -> None:
         self._is_playing = True
         self._is_paused = False
+        if self._performance_state == PerformanceState.ENDED:
+            self._set_performance_state(PerformanceState.WAITING)
 
     def pause(self) -> None:
         self._is_paused = True
@@ -256,6 +283,10 @@ class SongSession:
     def reset(self) -> None:
         """Reinicia os relógios, fusão e contextos para o início da música (t=0.0)."""
         self._position_generation += 1
+        self._performance_state = PerformanceState.WAITING
+        self._last_activity_time = None
+        self._recovery_started_at = None
+        self._recovery_evidence = 0
         self._clock.bpm = self._song.performance_settings.bpm_override or self._song.bpm
         self._clock.reset()
         self._context.reset()
@@ -266,6 +297,7 @@ class SongSession:
         self._structure_analyzer.reset()
         self._position_estimator.reset()
         self._current_chart_pos = self._position_estimator.refresh_position()
+        self._last_confident_chart_pos = self._current_chart_pos
         self._current_fused_state = FusedMusicalState(
             expected_chord=self._current_chart_pos.current_chord,
             effective_chord=self._current_chart_pos.current_chord,
@@ -306,15 +338,97 @@ class SongSession:
             timestamp, bpm=bpm_input,
             beat_timestamp=tempo_result.beat_timestamp if tempo_result else None,
             observation_confidence=tempo_result.confidence if tempo_result else 0.0)
-        old_offset = self._position_estimator.bar_offset
-        self._current_chart_pos = self._position_estimator.update(
-            timestamp=timestamp, detected_chord=detected_chord,
-            detected_confidence=detected_confidence, detected_key=detected_key,
-            detected_note=source_context.note if source_context is not None else "--",
-            note_confidence=source_context.note_confidence if source_context is not None else 0.0)
-        if self._position_estimator.bar_offset != old_offset:
-            self._position_generation += 1
+        activity = self._has_musical_activity(source_context, detected_chord,
+                                               detected_confidence, tempo_result)
+        should_localize = self._update_performance_state(
+            timestamp, activity, activity_observable=source_context is not None)
+        if should_localize:
+            old_offset = self._position_estimator.bar_offset
+            self._current_chart_pos = self._position_estimator.update(
+                timestamp=timestamp, detected_chord=detected_chord,
+                detected_confidence=detected_confidence, detected_key=detected_key,
+                detected_note=source_context.note if source_context is not None else "--",
+                note_confidence=source_context.note_confidence if source_context is not None else 0.0)
+            if self._position_estimator.bar_offset != old_offset:
+                self._position_generation += 1
+            if activity and self._current_chart_pos.confidence >= 0.50:
+                self._last_confident_chart_pos = self._current_chart_pos
+        else:
+            # Mantém a última posição confirmada: pausa não é avanço nem fim da música.
+            self._current_chart_pos = replace(self._last_confident_chart_pos,
+                                               absolute_time=timestamp)
         return self._publish_position(detected_chord, detected_confidence, detected_key, source_context)
+
+    def _has_musical_activity(self, source_context: Optional[MusicalContext],
+                               chord: str, chord_confidence: float,
+                               tempo_result: Optional[TempoResult]) -> bool:
+        if chord not in ("", "--", "UNKNOWN", "N") and chord_confidence >= 0.35:
+            return True
+        if tempo_result and tempo_result.beat_timestamp is not None and tempo_result.confidence >= 0.60:
+            return True
+        if source_context is None:
+            return False
+        return (source_context.audio_activity >= 0.010 or
+                source_context.note_confidence >= 0.35 or
+                source_context.chord_confidence >= 0.35)
+
+    def _set_performance_state(self, state: PerformanceState) -> None:
+        if state != self._performance_state:
+            self._performance_state = state
+            self._position_generation += 1
+
+    def _near_chart_end(self) -> bool:
+        return (self._last_confident_chart_pos.current_bar >=
+                max(1, self._alignment.total_bars - 1))
+
+    def _update_performance_state(self, timestamp: float, activity: bool,
+                                  activity_observable: bool) -> bool:
+        """Atualiza apenas a decisão de tocar; posição e relógio mantêm responsabilidades próprias."""
+        if self._performance_state == PerformanceState.ENDED:
+            return False
+        # Chamadores de teste/importação podem fornecer somente tempo e cifra. Isso não é
+        # evidência de silêncio do músico; preserva o modo temporal sem sensor de atividade.
+        if not activity_observable:
+            self._last_activity_time = timestamp
+            if self._performance_state == PerformanceState.WAITING:
+                self._set_performance_state(PerformanceState.PLAYING)
+            return True
+        if activity:
+            if self._performance_state in (PerformanceState.WAITING,
+                                           PerformanceState.HOLDING,
+                                           PerformanceState.UNCERTAIN):
+                self._set_performance_state(PerformanceState.RECOVERING)
+                self._recovery_started_at = timestamp
+                self._recovery_evidence = 0
+            self._last_activity_time = timestamp
+            if self._performance_state == PerformanceState.RECOVERING:
+                self._recovery_evidence += 1
+                elapsed = timestamp - (self._recovery_started_at or timestamp)
+                at_downbeat = self._clock.beat == 1 and self._clock.beat_position <= 0.12
+                if ((self._recovery_evidence >= 2 or elapsed >= self._RECOVERY_MIN_SECONDS)
+                        and self._position_estimator.tracking_state != TrackingState.LOST
+                        and at_downbeat):
+                    self._set_performance_state(PerformanceState.PLAYING)
+            elif self._performance_state == PerformanceState.PLAYING:
+                pass
+            return True
+
+        if self._last_activity_time is None:
+            return False
+        silence = max(0.0, timestamp - self._last_activity_time)
+        if self._performance_state == PerformanceState.PLAYING and silence >= 0.35:
+            self._set_performance_state(PerformanceState.UNCERTAIN)
+        if self._performance_state in (PerformanceState.PLAYING, PerformanceState.UNCERTAIN,
+                                       PerformanceState.RECOVERING) and silence >= self._SHORT_PAUSE_SECONDS:
+            self._set_performance_state(PerformanceState.HOLDING)
+        if self._performance_state == PerformanceState.HOLDING and silence >= self._WAITING_SECONDS:
+            self._set_performance_state(PerformanceState.WAITING)
+        if (self._performance_state == PerformanceState.WAITING and
+                silence >= self._END_SILENCE_SECONDS and self._near_chart_end()):
+            self._set_performance_state(PerformanceState.ENDED)
+        return self._performance_state not in (PerformanceState.HOLDING,
+                                                PerformanceState.WAITING,
+                                                PerformanceState.ENDED)
 
     def _publish_position(self, detected_chord: str = "--", detected_confidence: float = 0.0,
                           detected_key: str = "--", source_context: Optional[MusicalContext] = None,
@@ -358,6 +472,7 @@ class SongSession:
         ctx.next_expected_section = position.next_section_name
         ctx.position_generation = self._position_generation
         ctx.chart_available = bool(self._chart.sections and position.current_chord != "--")
+        ctx.performance_state = self.performance_state
         ctx.confirmed_variation_chord = (detected_chord if state.confirmed_variation
                                          and detected_confidence >= 0.85 else "--")
         ctx.chord_confidence = state.confidence
@@ -396,6 +511,7 @@ class SongSession:
             "section": self.chart_position.section_name, "tracking_state": self.tracking_state,
             "bar_offset": self._position_estimator.bar_offset,
             "expected_chord": self.expected_chord, "detected_chord": self.detected_chord,
+            "performance_state": self.performance_state,
         }
 
     def format_position_diagnostics(self) -> str:
@@ -406,6 +522,7 @@ class SongSession:
             f"CHART LINE: {data['line_index']} | SECTION: {data['section']} | "
             f"TRACKING: {data['tracking_state']} | BAR OFFSET: {data['bar_offset']:+d} | "
             f"EXPECTED: {data['expected_chord']} | DETECTED: {data['detected_chord']}"
+            f" | PERFORMANCE: {data['performance_state']}"
         )
 
     def get_tempo_diagnostics(self) -> Dict[str, Any]:

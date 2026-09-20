@@ -54,7 +54,7 @@ Execute na raiz:
 python -B -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-A suíte atual passou em 242 testes, incluindo 17 regressões da posição musical, 6 do seguimento por notas, 14 do tempo adaptativo e 12 do baixo preditivo.
+A suíte atual passou em 249 testes, incluindo 17 regressões da posição musical, 6 do seguimento por notas, 14 do tempo adaptativo, 12 do baixo preditivo e 7 da máquina de performance.
 A suíte inclui um teste Tkinter e precisa de sessão gráfica; em Linux sem tela,
 use um display virtual. A passagem dos testes não substitui audição e testes de hardware.
 As amostras WAV incluídas são geradas pelo próprio projeto.
@@ -164,3 +164,19 @@ O agendamento conhece mudanças em fronteiras de compassos porque o modelo
 atual de `ChartAlignment` ainda representa a duração de cada acorde em
 compassos inteiros. Mudanças de acorde dentro do compasso e subdivisões
 rítmicas exigem ampliar a linha temporal da cifra.
+
+## Máquina de performance
+
+`PerformanceState` pertence à `SongSession` e decide se a banda deve tocar;
+ele não substitui `TrackingState` do `PositionEstimator` nem `HOLDOVER` do
+relógio. A sequência é `WAITING → RECOVERING → PLAYING`; silêncio observado
+por 2,5 segundos passa para `HOLDING`, e quatro segundos de pausa passam para
+`WAITING`. Nessas fases a sessão preserva cifra, seção e última posição
+confiável, mas o baixo cancela somente ataques futuros.
+
+Após atividade retornar, o estimador volta a receber evidências e a banda só
+prepara uma entrada no próximo downbeat. Fim natural exige silêncio prolongado
+perto do final da cifra; silêncio no meio nunca vira `ENDED`. Ao terminar,
+eventos futuros são cancelados e a sessão segue disponível para `start()` e
+replay. A atividade vem do RMS do áudio, nota/acorde confiáveis ou pulso
+observado; chamadas sem sinal de áudio não são tratadas como silêncio.

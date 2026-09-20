@@ -2793,6 +2793,7 @@ class MainWindow:
         # Indicador visual avançado de Rastreamento (TrackingState)
         tracking_st = getattr(session, "tracking_state", "TRACKING")
         pos_conf = getattr(session, "position_confidence", 0.90)
+        performance_st = getattr(session, "performance_state", "PLAYING")
 
         if tracking_st == "TRACKING":
             st_color = "#00e676"
@@ -2806,6 +2807,9 @@ class MainWindow:
         else: # LOST
             st_color = "#ff7b72"
             st_text = f"TEMPORAL ({int(pos_conf * 100)}%)"
+
+        if performance_st != "PLAYING":
+            st_text = f"{performance_st} | {st_text}"
 
         if session.fusion.discrepancies and session.fusion.discrepancies[-1].classification == "possible_performance_variation":
             last_disc = session.fusion.discrepancies[-1]

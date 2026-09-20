@@ -155,6 +155,11 @@ class BassSynthesizer:
                 self._scheduled.clear()
                 self._generation_id = generation_id
 
+    def cancel_scheduled(self) -> None:
+        """Cancela ataques futuros sem interromper a nota que já está soando."""
+        with self._lock:
+            self._scheduled.clear()
+
     def schedule_note(self, key: tuple, start_time: float, midi_note: int,
                       velocity: int, duration: float, source: str = "chart",
                       confidence: float = 1.0, generation_id: int = 0,

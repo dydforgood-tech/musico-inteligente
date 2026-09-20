@@ -30,6 +30,7 @@ class MusicalContext:
     note_confidence: float = 0.0                # Grau de certeza do pitch (0.0 a 1.0)
     cents_deviation: float = 0.0                # Desvio de afinação em cents (-50 a +50)
     chroma_vector: List[float] = field(default_factory=lambda: [0.0] * 12)  # Energia das 12 classes C..B
+    audio_activity: float = 0.0                # RMS do bloco de referência, para estado de performance
 
     # ============================================================
     # 3. Análise Harmônica e Acorde Atual
@@ -42,6 +43,7 @@ class MusicalContext:
     confirmed_variation_chord: str = "--"
     position_generation: int = 0               # Incrementado quando a projeção da cifra muda
     chart_available: bool = False
+    performance_state: str = "PLAYING"         # Estado da banda, separado de tracking/clock
     current_chord: str = "--"                   # Alias de compatibilidade
     chord_root: str = "--"                      # Tônica do acorde (ex: "C")
     chord_quality: str = "--"                   # Qualidade (ex: "major", "minor")
@@ -152,6 +154,7 @@ class MusicalContext:
         self.note_confidence = 0.0
         self.cents_deviation = 0.0
         self.chroma_vector = [0.0] * 12
+        self.audio_activity = 0.0
 
         self.chord = "--"
         self.next_expected_chord = "--"
@@ -161,6 +164,7 @@ class MusicalContext:
         self.confirmed_variation_chord = "--"
         self.position_generation = 0
         self.chart_available = False
+        self.performance_state = "WAITING"
         self.current_chord = "--"
         self.chord_root = "--"
         self.chord_quality = "--"

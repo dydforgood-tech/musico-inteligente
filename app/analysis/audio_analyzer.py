@@ -288,6 +288,8 @@ class AudioAnalyzer:
                 chroma_vector=chroma,
                 lat_metrics=lat_metrics
             )
+            # Atividade independente de reconhecer nota ou acorde: evita confundir silêncio com áudio incerto.
+            ctx.audio_activity = float(np.sqrt(np.mean(np.square(np.asarray(audio_chunk, dtype=np.float64)))))
 
             # Localiza primeiro; estrutura, predição e instrumentos só recebem a posição final.
             self._active_session = session

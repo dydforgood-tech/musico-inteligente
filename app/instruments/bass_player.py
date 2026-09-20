@@ -216,6 +216,10 @@ class BassPlayer(VirtualInstrument):
             return None
 
         self._last_context = context
+        performance_state = getattr(context, "performance_state", "PLAYING")
+        if performance_state in ("HOLDING", "WAITING", "ENDED"):
+            self._synthesizer.cancel_scheduled()
+            return None
         if context.tempo_tracking_state != "UNINITIALIZED":
             return self._schedule_next_beat(context)
 
@@ -300,6 +304,7 @@ class BassPlayer(VirtualInstrument):
             self._last_triggered_beat = None
             self._last_chord = "--"
             self._last_scheduled_time = None
+        recovering = context.performance_state == "RECOVERING"
         bpm = context.bpm if context.bpm > 0 else 120.0
         beat_duration = 60.0 / bpm
         beats = max(1, int(context.meter.split('/')[0]))
@@ -314,6 +319,11 @@ class BassPlayer(VirtualInstrument):
         if beat > beats:
             beat = 1
             bar += 1
+        # A recuperação prepara somente uma entrada em downbeat; não entra no meio da frase.
+        if recovering and beat != 1:
+            start_time += (beats - beat + 1) * beat_duration
+            bar += 1
+            beat = 1
         key = (bar, beat)
         chart_changes_here = (bar > context.bar and context.next_expected_chord != "--" and
                               (context.next_change_bar == 0 or bar >= context.next_change_bar))
