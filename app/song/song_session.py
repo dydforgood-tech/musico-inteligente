@@ -23,6 +23,7 @@ from app.music.pattern_memory import PatternMemory
 from app.music.prediction_engine import PredictionEngine, MusicPrediction
 from app.music.position_estimator import PositionEstimator, TrackingState, EstimatedPosition
 from app.analysis.tempo_detector import TempoResult
+from app.music.follow_confidence import calculate_follow_confidence
 
 
 class PerformanceState(str, Enum):
@@ -113,6 +114,11 @@ class SongSession:
 
         # 7. Estado Instantâneo Consolidado
         self._position_generation = 0
+        self._chart_alignment_confidence = max(0.0, min(1.0, float(
+            song.metadata.get("chart_overall_confidence", 1.0))))
+        self._follow_stability = 0.70
+        self._last_follow_timestamp: Optional[float] = None
+        self._follow_observations_available = False
         self._performance_state = PerformanceState.WAITING
         self._last_activity_time: Optional[float] = None
         self._recovery_started_at: Optional[float] = None
@@ -287,6 +293,9 @@ class SongSession:
         self._last_activity_time = None
         self._recovery_started_at = None
         self._recovery_evidence = 0
+        self._follow_stability = 0.70
+        self._last_follow_timestamp = None
+        self._follow_observations_available = False
         self._clock.bpm = self._song.performance_settings.bpm_override or self._song.bpm
         self._clock.reset()
         self._context.reset()
@@ -326,6 +335,8 @@ class SongSession:
         tempo_result: Optional[TempoResult] = None,
     ) -> FusedMusicalState:
         """Tempo bruto → estimador → snapshot musical → todos os consumidores."""
+        if source_context is not None:
+            self._follow_observations_available = True
         if timestamp < self._clock.elapsed_time - 0.01:
             # Seek da fonte invalida o horário de qualquer evento preparado.
             self._position_generation += 1
@@ -472,6 +483,7 @@ class SongSession:
         ctx.next_expected_section = position.next_section_name
         ctx.position_generation = self._position_generation
         ctx.chart_available = bool(self._chart.sections and position.current_chord != "--")
+        ctx.chart_alignment_confidence = self._chart_alignment_confidence if ctx.chart_available else 0.0
         ctx.performance_state = self.performance_state
         ctx.confirmed_variation_chord = (detected_chord if state.confirmed_variation
                                          and detected_confidence >= 0.85 else "--")
@@ -499,8 +511,67 @@ class SongSession:
             self._structure_analyzer.update_online(
                 ctx, None, None, self._clock,
                 chart_position=position if self._chart.sections else None)
+        self._update_follow_confidence(ctx, state, timestamp)
         ctx.sync_aliases()
         return state
+
+    def _update_follow_confidence(self, ctx: MusicalContext, state: FusedMusicalState,
+                                  timestamp: float) -> None:
+        """Publica uma decisão global sem substituir as métricas originais."""
+        elapsed = max(0.0, timestamp - self._last_follow_timestamp) if self._last_follow_timestamp is not None else 0.0
+        self._last_follow_timestamp = timestamp
+        stable = (self._performance_state == PerformanceState.PLAYING and
+                  ctx.tracking_state != TrackingState.LOST.value and
+                  not state.is_discrepancy)
+        target = 0.95 if stable else 0.30
+        alpha = min(0.45, 0.12 + elapsed * 0.35)
+        self._follow_stability += (target - self._follow_stability) * alpha
+        ctx.recent_stability = max(0.0, min(1.0, self._follow_stability))
+        # Transporte/cifra sem uma fonte observável é ensaio determinístico, não
+        # evidência de acompanhamento ruim. Assim que chega áudio real, as
+        # confianças medidas voltam a comandar a classificação.
+        tempo = ctx.tempo_confidence
+        phase = ctx.phase_confidence
+        if not self._follow_observations_available:
+            tempo = max(tempo, 0.70)
+            phase = max(phase, 0.70)
+        follow = calculate_follow_confidence(
+            tempo=tempo, phase=phase,
+            position=ctx.position_confidence, harmonic=ctx.chord_confidence,
+            chart_alignment=ctx.chart_alignment_confidence,
+            stability=ctx.recent_stability)
+        ctx.confidence = follow.score
+        ctx.follow_confidence_level = follow.level
+        ctx.refresh_total_latency()
+
+    def get_follow_diagnostics(self) -> Dict[str, Any]:
+        ctx = self._context
+        return {
+            "follow_confidence": ctx.follow_confidence,
+            "follow_level": ctx.follow_confidence_level,
+            "tempo_confidence": ctx.tempo_confidence,
+            "phase_confidence": ctx.phase_confidence,
+            "position_confidence": ctx.position_confidence,
+            "chord_confidence": ctx.chord_confidence,
+            "capture_latency": ctx.capture_latency,
+            "analysis_latency": ctx.analysis_latency,
+            "scheduling_latency": ctx.scheduling_latency,
+            "output_latency": ctx.output_latency,
+            "total_latency": ctx.total_estimated_latency,
+        }
+
+    def format_follow_diagnostics(self) -> str:
+        d = self.get_follow_diagnostics()
+        return (f"FOLLOW CONFIDENCE: {d['follow_level']} ({d['follow_confidence']:.2f}) | "
+                f"TEMPO CONFIDENCE: {d['tempo_confidence']:.2f} | "
+                f"PHASE CONFIDENCE: {d['phase_confidence']:.2f} | "
+                f"POSITION CONFIDENCE: {d['position_confidence']:.2f} | "
+                f"CHORD CONFIDENCE: {d['chord_confidence']:.2f} | "
+                f"CAPTURE LATENCY: {d['capture_latency']:.1f} ms | "
+                f"ANALYSIS LATENCY: {d['analysis_latency']:.1f} ms | "
+                f"SCHEDULER LATENCY: {d['scheduling_latency']:.1f} ms | "
+                f"OUTPUT LATENCY: {d['output_latency']:.1f} ms | "
+                f"TOTAL ESTIMATED LATENCY: {d['total_latency']:.1f} ms")
 
     def get_position_diagnostics(self) -> Dict[str, Any]:
         """Diagnóstico derivado; não mantém outra posição independente."""

@@ -225,12 +225,15 @@ class AudioAnalyzer:
             self._structure_analyzer.reset()
             self._band.reset_all()
 
-    def update_audio_format(self, sample_rate: int, chunk_size: int) -> None:
+    def update_audio_format(self, sample_rate: int, chunk_size: int,
+                            capture_latency_ms: float = 0.0,
+                            output_latency_ms: float = 0.0) -> None:
         """Atualiza a taxa de amostragem e tamanho do bloco para os analisadores e instrumentos."""
         with self._lock:
             self._sample_rate = sample_rate
             self._chunk_size = chunk_size
             self._latency_tracker.update_config(sample_rate, chunk_size)
+            self._latency_tracker.set_external_latency(capture_latency_ms, output_latency_ms)
             self._context_manager.context.sample_rate = sample_rate
             self._bass_player.synthesizer.set_sample_rate(sample_rate)
 

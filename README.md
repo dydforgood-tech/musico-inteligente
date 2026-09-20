@@ -48,7 +48,8 @@ Estrutura central que representa o estado musical instantâneo e temporal:
 - **Harmonia & Acorde Atual**: `chord`, `previous_chord`, `chord_start_time`, `chord_duration`, `chord_confidence`, `inversion`, `bass_note`, `detected_notes`.
 - **Tonalidade (Key)**: `key`, `previous_key`, `key_start_time`, `key_duration`, `key_confidence`.
 - **Relógio Musical (MusicalClock)**: `bpm`, `meter`, `bar` (compasso), `beat` (tempo 1 a 4), `beat_position` (fase [0..1)), `is_beat` (pulso).
-- **Latência Quadripartida**: `processing_latency`, `analysis_window`, `stabilization_delay`, `estimated_musical_latency`.
+- **Follow Confidence**: score consolidado e nível `HIGH`, `MEDIUM` ou `LOW`, com tempo/fase, posição, harmonia, cifra e estabilidade recente.
+- **Latência do pipeline**: `capture_latency`, `analysis_latency`, `processing_latency`, `decision_latency`, `scheduling_latency`, `output_latency` e `total_estimated_latency`.
 
 ### 2. `ChordHistory` e Estabilizador Temporal (`app/analysis/chord_history.py`)
 - **Filtro de Ruído & Histerese**: Evita oscilações transitórias (ex: se um acorde oscilar `C → G → C`, o `G` de 1 frame é rejeitado como ruído).
@@ -74,13 +75,9 @@ Estrutura central que representa o estado musical instantâneo e temporal:
 
 ---
 
-## ⏱️ Métricas de Latência Quadripartida
+## ⏱️ Métricas de Latência do Pipeline
 
-1. **`processing_latency`**: Tempo real gasto pela CPU no cálculo dos algoritmos DSP (medido em nanossegundos via `perf_counter` ~ 1.0 a 1.5 ms).
-2. **`analysis_window`**: Tamanho do bloco temporal de áudio analisado (4096 amostras a 44100 Hz = 92.8 ms).
-3. **`stabilization_delay`**: Atraso temporal configurado para confirmar a persistência do novo acorde e rejeitar ruídos (~ 200 ms).
-4. **`estimated_musical_latency`**: Latência musical estimada total de ponta a ponta:
-   $$\text{Latência Estimada} = \text{processing\_latency} + \frac{\text{analysis\_window}}{2} + \text{stabilization\_delay} \approx 245\text{ ms}$$
+`capture_latency` e `output_latency` registram somente buffers conhecidos; o atraso do driver não é adivinhado. A análise usa o centro da janela, `decision_latency` e `scheduling_latency` são medidos no baixista, e `total_estimated_latency` soma as parcelas disponíveis, inclusive a estabilização harmônica.
 
 ---
 

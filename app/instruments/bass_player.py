@@ -12,6 +12,7 @@ Orquestrador central do baixista virtual:
 from typing import Optional, List, Dict, Tuple
 import collections
 import copy
+import time
 
 from app.instruments.base import VirtualInstrument
 from app.instruments.bass_model import BassNoteEvent, BassDecision, BassPatternType
@@ -335,6 +336,21 @@ class BassPlayer(VirtualInstrument):
                   context.position_confidence < 0.65))):
             next_chord = context.confirmed_variation_chord
             source = "audio-confirmed"
+        follow_level = getattr(context, "follow_confidence_level", "MEDIUM")
+        # Baixa confiança mantém a banda presente, mas só em um ponto seguro e
+        # sem preencher os tempos intermediários. Em média, AUTO evita notas de
+        # passagem e fica em fundamental/quinta.
+        if follow_level == "LOW" and beat != 1 and source != "audio-confirmed":
+            return None
+        effective_pattern = self._pattern_override
+        if self._pattern_override == BassPatternType.AUTO:
+            if follow_level == "LOW":
+                # Uma variação já confirmada é evidência forte suficiente para
+                # uma fundamental segura no beat atual; ainda não há antecipação.
+                effective_pattern = (BassPatternType.ROOT if source == "audio-confirmed"
+                                     else BassPatternType.SUSTAINED)
+            elif follow_level == "MEDIUM":
+                effective_pattern = BassPatternType.ROOT_FIFTH
         same_key = key == self._last_triggered_beat
         if (same_key and next_chord == self._last_chord and
                 self._last_scheduled_time is not None and
@@ -350,7 +366,9 @@ class BassPlayer(VirtualInstrument):
             decision_context.chord_quality = symbol.quality
             decision_context.bass_note = symbol.bass_note or symbol.root
             decision_context.inversion = "slash" if symbol.bass_note and symbol.bass_note != symbol.root else "root"
-        decision = self._decision_engine.decide(decision_context, pattern_override=self._pattern_override)
+        decision_started = time.perf_counter()
+        decision = self._decision_engine.decide(decision_context, pattern_override=effective_pattern)
+        context.decision_latency = (time.perf_counter() - decision_started) * 1000.0
         self._current_decision = decision
         steps = self._pattern_generator.generate_pattern(decision, beats=beats,
                                                          chord_duration_beats=float(beats))
@@ -367,9 +385,24 @@ class BassPlayer(VirtualInstrument):
                               start_time=round(start_time, 4), duration=round(duration, 4),
                               velocity=velocity, beat=beat, bar=bar,
                               confidence=decision.confidence, reason=reason)
-        self._synthesizer.schedule_note(key, start_time, midi_note, velocity, duration,
+        execution_time = start_time
+        can_compensate = (follow_level == "HIGH" and source == "chart" and
+                          context.chart_available and context.position_confidence >= 0.75)
+        if can_compensate:
+            compensation = max(0.0, context.total_estimated_latency) / 1000.0
+            candidate = start_time - compensation
+            # Se a análise chegou tarde, não transforma uma previsão em ataque atrasado.
+            if candidate >= context.timestamp + 0.010:
+                execution_time = candidate
+                reason = f"{reason} [Compensa {compensation * 1000.0:.0f} ms]"
+                event.reason = reason
+        scheduler_started = time.perf_counter()
+        self._synthesizer.schedule_note(key, execution_time, midi_note, velocity, duration,
                                         source=source, confidence=context.position_confidence,
-                                        generation_id=context.position_generation, note=note_name)
+                                        generation_id=context.position_generation, note=note_name,
+                                        musical_time=start_time)
+        context.scheduling_latency = (time.perf_counter() - scheduler_started) * 1000.0
+        context.refresh_total_latency()
         if same_key and self._recent_events and (self._recent_events[-1].bar, self._recent_events[-1].beat) == key:
             self._recent_events.pop()
         self._recent_events.append(event)

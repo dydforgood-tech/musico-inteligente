@@ -21,6 +21,7 @@ class AudioPlayer:
     
     Permite Play, Pause, Stop, Seek e acoplamento com o analisador de DSP.
     """
+    OUTPUT_BLOCK_SIZE = 2048
 
     def __init__(self):
         self._source: Optional[AudioSource] = None
@@ -80,12 +81,20 @@ class AudioPlayer:
                 channels=channels,
                 dtype="float32",
                 callback=self._audio_callback,
-                blocksize=2048,
+                blocksize=self.OUTPUT_BLOCK_SIZE,
             )
             self._stream.start()
         except Exception as e:
             print(f"[AudioPlayer] Erro ao iniciar stream de saída de áudio: {e}")
             self._stream = None
+
+    @property
+    def estimated_output_latency_ms(self) -> float:
+        """Estimativa do buffer configurado; o atraso do driver permanece desconhecido."""
+        if self._source is None:
+            return 0.0
+        sample_rate = self._source.get_sample_rate()
+        return (self.OUTPUT_BLOCK_SIZE / float(sample_rate)) * 1000.0 if sample_rate > 0 else 0.0
 
     def _close_stream(self) -> None:
         """Fecha o stream do sounddevice se estiver ativo."""
@@ -235,3 +244,4 @@ class AudioPlayer:
         if self._source is not None:
             self._source.close()
             self._source = None
+    OUTPUT_BLOCK_SIZE = 2048

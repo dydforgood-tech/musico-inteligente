@@ -1035,7 +1035,9 @@ class MainWindow:
             self.waveform_view.set_waveform_data(mins, maxs, duration)
 
             # Atualizar formato de análise
-            self.analyzer.update_audio_format(sample_rate=sr, chunk_size=4096)
+            self.analyzer.update_audio_format(
+                sample_rate=sr, chunk_size=4096,
+                output_latency_ms=self.player.estimated_output_latency_ms)
             self.latency_tracker.update_config(sample_rate=sr, chunk_size=4096)
 
             # Iniciar pré-análise de andamento em segundo plano sem travar a interface
@@ -1232,10 +1234,14 @@ class MainWindow:
                         self.lbl_beat_leds.config(text="   ".join(leds), fg=led_color)
 
                     # 5. Latência Quadripartida
-                    self.lbl_lat_proc.config(text=f"Cálculo DSP (Proc): {ctx.processing_latency:.1f} ms")
-                    self.lbl_lat_win.config(text=f"Janela de Análise (Win): {ctx.analysis_window:.1f} ms (4096 samples)")
-                    self.lbl_lat_stab.config(text=f"Estabilização Temporal (Stab): {ctx.stabilization_delay:.1f} ms")
-                    self.lbl_lat_est.config(text=f"Latência Musical Estimada: ~{ctx.estimated_musical_latency:.1f} ms")
+                    self.lbl_lat_proc.config(text=(f"Captura: {ctx.capture_latency:.1f} ms  | "
+                                                    f"Cálculo DSP: {ctx.processing_latency:.1f} ms"))
+                    self.lbl_lat_win.config(text=(f"Análise: {ctx.analysis_latency:.1f} ms "
+                                                   f"(janela {ctx.analysis_window:.1f} ms)"))
+                    self.lbl_lat_stab.config(text=(f"Estabilização: {ctx.stabilization_delay:.1f} ms  | "
+                                                    f"Scheduler: {ctx.scheduling_latency:.1f} ms  | "
+                                                    f"Saída: {ctx.output_latency:.1f} ms"))
+                    self.lbl_lat_est.config(text=f"Total estimado: ~{ctx.total_estimated_latency:.1f} ms")
 
                     # 6. Cromagrama
                     self.chroma_view.update_chroma(ctx.chroma_vector)

@@ -93,16 +93,24 @@ class MusicalContext:
     # 6. Confiança Global
     # ============================================================
     confidence: float = 0.0                     # Confiança geral consolidada do sistema
+    follow_confidence_level: str = "MEDIUM"    # HIGH / MEDIUM / LOW; score é ``confidence``
+    chart_alignment_confidence: float = 0.0     # Confiabilidade conhecida da cifra/alinhamento
+    recent_stability: float = 0.0               # Estabilidade temporal das evidências recentes
 
     # ============================================================
     # 7. Métricas de Latência Quadripartida (Sem valores fictícios)
     # ============================================================
     processing_latency: float = 0.0             # Tempo de cálculo DSP do bloco em ms
     analysis_window: float = 0.0                # Duração do bloco de áudio analisado em ms
-    analysis_latency: float = 0.0               # Alias de compatibilidade
+    analysis_latency: float = 0.0               # Centro temporal efetivo da janela em ms
     stabilization_delay: float = 0.0            # Atraso configurado para confirmação temporal em ms
     estimated_musical_latency: float = 0.0      # Latência perceptível total estimada em ms
     estimated_latency: float = 0.0              # Alias de compatibilidade
+    capture_latency: float = 0.0                # Buffer de captura conhecido em ms
+    decision_latency: float = 0.0               # Tempo medido de decisão do instrumento em ms
+    scheduling_latency: float = 0.0             # Tempo medido ao inserir na fila em ms
+    output_latency: float = 0.0                 # Buffer de saída conhecido em ms
+    total_estimated_latency: float = 0.0        # Soma estimada das parcelas conhecidas
 
     # ============================================================
     # 8. Estrutura Musical e Antecipação Preditiva (Fase v0.3)
@@ -141,8 +149,21 @@ class MusicalContext:
         self.current_chord = self.chord
         self.current_key = self.key
         self.time_signature = self.meter
-        self.analysis_latency = self.analysis_window
         self.estimated_latency = self.estimated_musical_latency
+
+    @property
+    def follow_confidence(self) -> float:
+        """Alias sem duplicar a medida global consolidada."""
+        return self.confidence
+
+    def refresh_total_latency(self) -> None:
+        """Recalcula a soma sem modificar o timestamp ou a posição musical."""
+        self.total_estimated_latency = max(0.0, self.capture_latency) + max(0.0, self.analysis_latency) + \
+            max(0.0, self.processing_latency) + max(0.0, self.stabilization_delay) + \
+            max(0.0, self.decision_latency) + max(0.0, self.scheduling_latency) + \
+            max(0.0, self.output_latency)
+        self.estimated_musical_latency = self.total_estimated_latency
+        self.estimated_latency = self.total_estimated_latency
 
     def reset(self) -> None:
         """Reinicia o contexto para o estado inicial neutro."""
@@ -203,12 +224,20 @@ class MusicalContext:
         self.is_beat = False
 
         self.confidence = 0.0
+        self.follow_confidence_level = "MEDIUM"
+        self.chart_alignment_confidence = 0.0
+        self.recent_stability = 0.0
         self.processing_latency = 0.0
         self.analysis_window = 0.0
         self.analysis_latency = 0.0
         self.stabilization_delay = 0.0
         self.estimated_musical_latency = 0.0
         self.estimated_latency = 0.0
+        self.capture_latency = 0.0
+        self.decision_latency = 0.0
+        self.scheduling_latency = 0.0
+        self.output_latency = 0.0
+        self.total_estimated_latency = 0.0
 
         # Reset Estrutura e Predição (v0.3)
         self.current_section = "UNKNOWN"
@@ -248,11 +277,18 @@ class MusicalContext:
                 "confidence": self.position_confidence,
             },
             "confidence": round(self.confidence, 2),
+            "follow_confidence": {"level": self.follow_confidence_level,
+                                  "stability": round(self.recent_stability, 2)},
             "latency_ms": {
+                "capture": round(self.capture_latency, 2),
+                "analysis": round(self.analysis_latency, 2),
                 "processing": round(self.processing_latency, 2),
+                "decision": round(self.decision_latency, 2),
+                "scheduling": round(self.scheduling_latency, 2),
+                "output": round(self.output_latency, 2),
                 "window": round(self.analysis_window, 2),
                 "stabilization": round(self.stabilization_delay, 2),
-                "estimated_total": round(self.estimated_musical_latency, 2),
+                "estimated_total": round(self.total_estimated_latency, 2),
             },
             "structure": {
                 "section": self.current_section,

@@ -54,7 +54,7 @@ Execute na raiz:
 python -B -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-A suíte atual passou em 249 testes, incluindo 17 regressões da posição musical, 6 do seguimento por notas, 14 do tempo adaptativo, 12 do baixo preditivo e 7 da máquina de performance.
+A suíte atual passou em 254 testes, incluindo confiança consolidada e compensação de 20, 50, 100 e 200 ms. Execute a suíte completa após qualquer alteração.
 A suíte inclui um teste Tkinter e precisa de sessão gráfica; em Linux sem tela,
 use um display virtual. A passagem dos testes não substitui audição e testes de hardware.
 As amostras WAV incluídas são geradas pelo próprio projeto.
@@ -164,6 +164,27 @@ O agendamento conhece mudanças em fronteiras de compassos porque o modelo
 atual de `ChartAlignment` ainda representa a duração de cada acorde em
 compassos inteiros. Mudanças de acorde dentro do compasso e subdivisões
 rítmicas exigem ampliar a linha temporal da cifra.
+
+## Follow confidence e compensação de latência
+
+`confidence` é a medida global de acompanhamento e `follow_confidence_level`
+classifica o resultado em `HIGH`, `MEDIUM` ou `LOW`. A fórmula não é uma média
+cega: combina tempo/fase, posição, harmonia, confiabilidade da cifra e
+estabilidade recente, e limita o resultado quando tempo ou alinhamento são
+fracos. As métricas individuais permanecem no contexto para diagnóstico.
+
+Com `HIGH`, o baixo pode pré-agendar uma previsão da cifra no horário de saída
+igual ao beat musical menos a latência conhecida. `ScheduledBassNote` mantém os
+dois horários: `musical_time` nunca é alterado e `scheduled_time` é somente o
+instante físico de execução. Contextos `MEDIUM` usam fundamental/quinta sem
+antecipação; em `LOW`, o baixo aguarda o downbeat e sustenta a fundamental.
+Variações harmônicas já confirmadas ainda podem tocar uma fundamental segura,
+mas nunca são antecipadas.
+
+O total reúne captura, centro da janela de análise, DSP, estabilização, decisão,
+fila e saída. Captura e saída só entram quando o tamanho do buffer é conhecido;
+latência de driver não é fabricada. O diagnóstico da sessão mostra todas as
+parcelas e a UI expõe captura, análise, scheduler, saída e total.
 
 ## Máquina de performance
 

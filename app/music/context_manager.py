@@ -20,6 +20,7 @@ from app.analysis.chord_detector import Chord
 from app.analysis.key_detector import KeyResult
 from app.analysis.tempo_detector import TempoResult
 from app.utils.timing import LatencyMetrics
+from app.music.follow_confidence import calculate_follow_confidence
 
 
 class MusicalContextManager:
@@ -205,34 +206,25 @@ class MusicalContextManager:
         if lat_metrics is not None:
             ctx.processing_latency = lat_metrics.processing_ms
             ctx.analysis_window = lat_metrics.analysis_window_ms
-            # Latência musical estimada: metade da janela de análise + tempo de CPU + atraso de estabilização
-            ctx.estimated_musical_latency = (
-                (lat_metrics.analysis_window_ms * 0.5) +
-                lat_metrics.processing_ms +
-                stab_delay
-            )
+            ctx.capture_latency = lat_metrics.capture_ms
+            ctx.analysis_latency = lat_metrics.analysis_ms
+            ctx.output_latency = lat_metrics.output_ms
         else:
             ctx.processing_latency = 0.0
             ctx.analysis_window = (4096 / float(sample_rate)) * 1000.0 if sample_rate > 0 else 92.8
-            ctx.estimated_musical_latency = (ctx.analysis_window * 0.5) + stab_delay
+            ctx.capture_latency = 0.0
+            ctx.analysis_latency = ctx.analysis_window * 0.5
+            ctx.output_latency = 0.0
+        ctx.refresh_total_latency()
 
-        # 6. Cálculo da Confiança Global Ponderada
-        weights = []
-        scores = []
-        if ctx.chord != "--":
-            weights.append(0.40)
-            scores.append(ctx.chord_confidence)
-        if ctx.key != "--":
-            weights.append(0.35)
-            scores.append(ctx.key_confidence)
-        if ctx.note != "--":
-            weights.append(0.25)
-            scores.append(ctx.note_confidence)
-
-        if scores:
-            ctx.confidence = float(np.average(scores, weights=weights))
-        else:
-            ctx.confidence = 0.0
+        # 6. Confiança de acompanhamento. Sem cifra, ``chart_alignment`` permanece
+        # desconhecida e impede que a banda assuma que pode antecipar uma mudança.
+        follow = calculate_follow_confidence(
+            tempo=ctx.tempo_confidence, phase=ctx.phase_confidence,
+            position=ctx.position_confidence, harmonic=ctx.chord_confidence,
+            chart_alignment=ctx.chart_alignment_confidence, stability=ctx.recent_stability)
+        ctx.confidence = follow.score
+        ctx.follow_confidence_level = follow.level
 
         # 7. Sincronizar todos os aliases para garantir total retrocompatibilidade
         ctx.sync_aliases()

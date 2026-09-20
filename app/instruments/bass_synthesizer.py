@@ -28,6 +28,7 @@ class ScheduledBassNote:
     confidence: float
     generation_id: int
     note: str = "--"
+    musical_time: float = 0.0          # Horário do beat; pode diferir do horário de execução compensado
 
 
 class ActiveVoice:
@@ -163,7 +164,7 @@ class BassSynthesizer:
     def schedule_note(self, key: tuple, start_time: float, midi_note: int,
                       velocity: int, duration: float, source: str = "chart",
                       confidence: float = 1.0, generation_id: int = 0,
-                      note: str = "--") -> None:
+                      note: str = "--", musical_time: Optional[float] = None) -> None:
         """Arma uma nota para a linha de áudio; atualizações substituem a previsão anterior."""
         if not self._enabled or midi_note <= 0:
             return
@@ -172,7 +173,8 @@ class BassSynthesizer:
                 return
             self._scheduled[key] = ScheduledBassNote(
                 key, start_time, midi_note, velocity, duration,
-                source, confidence, generation_id, note)
+                source, confidence, generation_id, note,
+                start_time if musical_time is None else musical_time)
             if len(self._scheduled) > 8:
                 oldest = min(self._scheduled, key=lambda item: self._scheduled[item].scheduled_time)
                 del self._scheduled[oldest]
