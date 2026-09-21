@@ -136,6 +136,16 @@ class ChordDetector:
         exp_is_minor = bool(expected_chord) and _is_minor_symbol(expected_chord)
         key_info = _parse_key_hint(key) if key else None
 
+        # O prior só participa entre candidatos realmente ambíguos no áudio.
+        # Assim uma expectativa errada da cifra não consegue vencer um template
+        # cuja similaridade bruta é claramente superior.
+        raw_scores = {
+            name: float(np.dot(c_unit, tpl))
+            for name, (tpl, _root, _qual, _notes) in self._templates.items()
+        }
+        raw_best = max(raw_scores.values(), default=0.0)
+        ambiguity_margin = max(0.03, prior_weight * 0.75)
+
         # Encontrar template com maior escore (cosseno + prior), guardando o cosseno bruto
         best_adj = -1.0
         best_score = 0.0          # cosseno bruto do vencedor (para a confiança)
@@ -145,14 +155,15 @@ class ChordDetector:
         best_notes: List[str] = []
 
         for name, (tpl, root, qual, notes) in self._templates.items():
-            cos = float(np.dot(c_unit, tpl))
+            cos = raw_scores[name]
             bonus = 0.0
-            if exp_pc >= 0 and PITCH_CLASSES.index(root) == exp_pc:
+            prior_is_eligible = raw_best - cos <= ambiguity_margin
+            if prior_is_eligible and exp_pc >= 0 and PITCH_CLASSES.index(root) == exp_pc:
                 # Bônus por coincidir com a tônica esperada (+ extra se a qualidade casa)
                 bonus += prior_weight
                 if (qual == "minor") == exp_is_minor:
                     bonus += prior_weight * 0.5
-            elif key_info is not None:
+            elif prior_is_eligible and key_info is not None:
                 # Sem acorde esperado direto: enviesa levemente para o diatônico do tom
                 compat = compute_chord_key_compatibility(root, qual, key_info[0], key_info[1])
                 bonus += prior_weight * 0.5 * compat

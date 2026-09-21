@@ -52,7 +52,21 @@ class MusicalContext:
     detected_notes: List[str] = field(default_factory=list)  # Ex: ["C", "E", "G"]
     chord_confidence: float = 0.0               # Confiança do acorde (0.0 a 1.0)
     raw_detected_chord: str = "--"             # Saída do classificador antes da estabilização
+    raw_chord_confidence: float = 0.0
     smoothed_detected_chord: str = "--"        # Saída do ChordStabilizer
+    stable_chord_confidence: float = 0.0
+    stable_chord_duration: float = 0.0
+    stable_chord_root: str = "--"
+    stable_chord_quality: str = "--"
+    chord_candidate: str = "--"
+    chord_candidate_root: str = "--"
+    chord_candidate_confidence: float = 0.0
+    chord_candidate_age_ms: float = 0.0
+    chord_candidate_frames: int = 0
+    current_chord_support_age_ms: float = 0.0
+    stable_chord_stale: bool = False
+    expected_chart_chord: str = "--"
+    chart_prior_enabled: bool = False
 
     # Contexto Temporal do Acorde
     previous_chord: str = "--"                  # Acorde imediatamente anterior confirmado
@@ -204,7 +218,21 @@ class MusicalContext:
         self.detected_notes.clear()
         self.chord_confidence = 0.0
         self.raw_detected_chord = "--"
+        self.raw_chord_confidence = 0.0
         self.smoothed_detected_chord = "--"
+        self.stable_chord_confidence = 0.0
+        self.stable_chord_duration = 0.0
+        self.stable_chord_root = "--"
+        self.stable_chord_quality = "--"
+        self.chord_candidate = "--"
+        self.chord_candidate_root = "--"
+        self.chord_candidate_confidence = 0.0
+        self.chord_candidate_age_ms = 0.0
+        self.chord_candidate_frames = 0
+        self.current_chord_support_age_ms = 0.0
+        self.stable_chord_stale = False
+        self.expected_chart_chord = "--"
+        self.chart_prior_enabled = False
 
         self.previous_chord = "--"
         self.chord_start_time = 0.0
@@ -278,6 +306,23 @@ class MusicalContext:
             "note": self.note,
             "frequency_hz": round(self.frequency, 2),
             "chord": self.chord,
+            "harmonic_detection": {
+                "raw_chord": self.raw_detected_chord,
+                "raw_confidence": round(self.raw_chord_confidence, 2),
+                "stable_chord": self.smoothed_detected_chord,
+                "stable_confidence": round(self.stable_chord_confidence, 2),
+                "stable_root": self.stable_chord_root,
+                "stable_quality": self.stable_chord_quality,
+                "candidate": self.chord_candidate,
+                "candidate_root": self.chord_candidate_root,
+                "candidate_confidence": round(self.chord_candidate_confidence, 2),
+                "candidate_age_ms": round(self.chord_candidate_age_ms, 1),
+                "candidate_frames": self.chord_candidate_frames,
+                "support_age_ms": round(self.current_chord_support_age_ms, 1),
+                "stale": self.stable_chord_stale,
+                "expected_chart_chord": self.expected_chart_chord,
+                "chart_prior_enabled": self.chart_prior_enabled,
+            },
             "previous_chord": self.previous_chord,
             "chord_duration_s": round(self.chord_duration, 2),
             "key": self.key,

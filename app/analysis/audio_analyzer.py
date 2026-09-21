@@ -189,6 +189,19 @@ class AudioAnalyzer:
             self._expected_chord = expected_chord if expected_chord not in ("", "--") else None
             self._key_hint = key if key not in ("", "--") else None
 
+    def _harmonic_prior_for(self, session=None):
+        """Libera o prior da cifra apenas quando a posição está estável."""
+        if self._expected_chord is None:
+            return None, False
+        active = session if session is not None else self._active_session
+        if active is None:
+            return self._expected_chord, True
+        state = getattr(active, "tracking_state", "TRACKING")
+        state = getattr(state, "value", state)
+        confidence = float(getattr(active, "position_confidence", 0.0))
+        enabled = state == "TRACKING" and confidence >= 0.70
+        return (self._expected_chord if enabled else None), enabled
+
     def set_pitch_detector(self, algorithm_name: str) -> None:
         """Altera o detector de pitch em tempo de execução."""
         with self._lock:
@@ -246,6 +259,8 @@ class AudioAnalyzer:
 
             # 1. Análise de Pitch Fundamental (f0)
             pitch_res: PitchResult = self._pitch_detector.detect(audio_chunk, sample_rate)
+            audio_activity = float(np.sqrt(np.mean(
+                np.square(np.asarray(audio_chunk, dtype=np.float64)))))
 
             # 2. Extração de Cromagrama (12 Classes de Notas)
             chroma: np.ndarray = self._chroma_extractor.extract(audio_chunk, sample_rate)
@@ -260,13 +275,14 @@ class AudioAnalyzer:
 
             # 3. Análise Harmônica & Detecção de Acordes (com Inversões)
             #    Usa a expectativa da cifra (se definida) como prior musical da detecção.
+            expected_for_frame, chart_prior_enabled = self._harmonic_prior_for(session)
             chord_res: Chord = self._harmonic_analyzer.analyze_harmony(
                 audio_chunk=audio_chunk,
                 sample_rate=sample_rate,
                 dominant_pitch=pitch_res,
                 chroma_vector=chroma,
                 timestamp=timestamp,
-                expected_chord=self._expected_chord,
+                expected_chord=expected_for_frame,
                 key=self._key_hint
             )
 
@@ -289,12 +305,11 @@ class AudioAnalyzer:
                 key_res=key_res,
                 tempo_res=tempo_res,
                 chroma_vector=chroma,
-                lat_metrics=lat_metrics
+                lat_metrics=lat_metrics,
+                audio_activity=audio_activity,
             )
-            ctx.raw_detected_chord = chord_res.symbol
-            ctx.smoothed_detected_chord = ctx.chord
-            # Atividade independente de reconhecer nota ou acorde: evita confundir silêncio com áudio incerto.
-            ctx.audio_activity = float(np.sqrt(np.mean(np.square(np.asarray(audio_chunk, dtype=np.float64)))))
+            ctx.expected_chart_chord = self._expected_chord or "--"
+            ctx.chart_prior_enabled = chart_prior_enabled
 
             # Localiza primeiro; estrutura, predição e instrumentos só recebem a posição final.
             self._active_session = session

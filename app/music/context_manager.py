@@ -89,12 +89,14 @@ class MusicalContextManager:
         key_res: Optional[KeyResult] = None,
         tempo_res: Optional[TempoResult] = None,
         chroma_vector: Optional[np.ndarray] = None,
-        lat_metrics: Optional[LatencyMetrics] = None
+        lat_metrics: Optional[LatencyMetrics] = None,
+        audio_activity: float = 0.0,
     ) -> MusicalContext:
         """Consolida as informações de todos os analisadores no MusicalContext."""
         ctx = self._context
         ctx.timestamp = timestamp
         ctx.sample_rate = sample_rate
+        ctx.audio_activity = max(0.0, float(audio_activity))
         # Sem SongSession não há máquina de performance: o modo livre continua tocando.
         ctx.performance_state = "PLAYING"
 
@@ -123,9 +125,26 @@ class MusicalContextManager:
                 quality=chord_res.quality,
                 bass_note=chord_res.bass_note,
                 inversion=chord_res.inversion,
-                detected_notes=chord_res.detected_notes
+                detected_notes=chord_res.detected_notes,
+                chroma_vector=chroma_vector,
+                audio_activity=ctx.audio_activity,
             )
             ctx.chord = stable_chord
+            ctx.raw_detected_chord = chord_res.symbol
+            ctx.raw_chord_confidence = chord_res.confidence
+            ctx.smoothed_detected_chord = stable_chord
+            ctx.stable_chord_confidence = self._chord_stabilizer.chord_confidence
+            ctx.stable_chord_duration = self._chord_stabilizer.chord_duration
+            ctx.stable_chord_root = self._chord_stabilizer.chord_root
+            ctx.stable_chord_quality = self._chord_stabilizer.chord_quality
+            ctx.chord_candidate = self._chord_stabilizer.candidate_chord
+            ctx.chord_candidate_root = self._chord_stabilizer.candidate_root
+            ctx.chord_candidate_confidence = self._chord_stabilizer.candidate_confidence
+            ctx.chord_candidate_age_ms = self._chord_stabilizer.candidate_duration * 1000.0
+            ctx.chord_candidate_frames = self._chord_stabilizer.candidate_frame_count
+            ctx.current_chord_support_age_ms = (
+                self._chord_stabilizer.time_since_current_chord_support * 1000.0)
+            ctx.stable_chord_stale = self._chord_stabilizer.is_current_chord_stale
             ctx.previous_chord = self._chord_stabilizer.previous_chord
             ctx.chord_start_time = self._chord_stabilizer.chord_start_time
             ctx.chord_duration = self._chord_stabilizer.chord_duration
@@ -140,6 +159,20 @@ class MusicalContextManager:
             ctx.previous_chord = "--"
             ctx.chord_duration = 0.0
             ctx.chord_confidence = 0.0
+            ctx.raw_detected_chord = "--"
+            ctx.raw_chord_confidence = 0.0
+            ctx.smoothed_detected_chord = "--"
+            ctx.stable_chord_confidence = 0.0
+            ctx.stable_chord_duration = 0.0
+            ctx.stable_chord_root = "--"
+            ctx.stable_chord_quality = "--"
+            ctx.chord_candidate = "--"
+            ctx.chord_candidate_root = "--"
+            ctx.chord_candidate_confidence = 0.0
+            ctx.chord_candidate_age_ms = 0.0
+            ctx.chord_candidate_frames = 0
+            ctx.current_chord_support_age_ms = 0.0
+            ctx.stable_chord_stale = False
 
         # 3. Estabilização e Histórico de Tonalidade
         if key_res is not None:

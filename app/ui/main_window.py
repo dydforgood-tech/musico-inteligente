@@ -440,6 +440,12 @@ class MainWindow:
         self.lbl_prev_chord.pack()
         self.lbl_chord_inv = tk.Label(card_chord, text="Fundamental (Raiz)", bg="#181d26", fg="#5a6677", font=("Segoe UI", 7))
         self.lbl_chord_inv.pack()
+        self.lbl_chord_raw = tk.Label(card_chord, text="RAW: -- | Conf: 0%", bg="#181d26", fg="#8c9ba5", font=("Segoe UI", 7))
+        self.lbl_chord_raw.pack(anchor="w")
+        self.lbl_chord_candidate = tk.Label(card_chord, text="Candidato: --", bg="#181d26", fg="#8c9ba5", font=("Segoe UI", 7))
+        self.lbl_chord_candidate.pack(anchor="w")
+        self.lbl_chord_prior = tk.Label(card_chord, text="Cifra: -- | Prior: OFF", bg="#181d26", fg="#8c9ba5", font=("Segoe UI", 7))
+        self.lbl_chord_prior.pack(anchor="w")
 
         # -------------------------------------------------------------
         # 3. TONALIDADE ESTIMADA (KEY) (Fase 11)
@@ -1186,19 +1192,46 @@ class MainWindow:
                         self.lbl_sub_note.config(text="Sem sinal tonal", fg="#5a6677")
                         self.lbl_cents.config(text="Afinação: --", fg="#5a6677")
 
-                    # 2. Acorde Atual & Tempo no Acorde
-                    if ctx.chord != "--":
-                        self.lbl_val_chord.config(text=ctx.chord, fg="#00e676")
-                        self.lbl_chord_duration.config(text=f"Tempo no acorde: {ctx.chord_duration:.2f} s", fg="#00e676")
-                        prev_txt = f"Anterior: {ctx.previous_chord}  |  Conf: {int(ctx.chord_confidence * 100)}%"
+                    # 2. Ouvido harmônico: RAW, estabilizado, candidato e prior
+                    stable_chord = getattr(ctx, "smoothed_detected_chord", "--")
+                    stable_conf = getattr(ctx, "stable_chord_confidence", 0.0)
+                    stable_duration = getattr(ctx, "stable_chord_duration", 0.0)
+                    if stable_chord != "--":
+                        self.lbl_val_chord.config(text=stable_chord, fg="#00e676")
+                        self.lbl_chord_duration.config(text=f"Tempo no acorde: {stable_duration:.2f} s", fg="#00e676")
+                        support_ms = getattr(ctx, "current_chord_support_age_ms", 0.0)
+                        prev_txt = f"Anterior: {ctx.previous_chord}  |  Stable conf: {int(stable_conf * 100)}%  |  Suporte: {support_ms:.0f} ms"
                         self.lbl_prev_chord.config(text=prev_txt, fg="#ffffff")
-                        inv_desc = "Fundamental (Raiz)" if ctx.inversion == "root" else f"Inversão: {ctx.inversion} (Baixo em {ctx.bass_note})"
-                        self.lbl_chord_inv.config(text=inv_desc, fg="#00d2ff" if ctx.inversion != "root" else "#8c9ba5")
+                        stable_root = getattr(ctx, "stable_chord_root", "--")
+                        stable_quality = getattr(ctx, "stable_chord_quality", "--")
+                        self.lbl_chord_inv.config(
+                            text=f"Raiz estável: {stable_root}  |  Qualidade: {stable_quality}",
+                            fg="#8c9ba5")
                     else:
                         self.lbl_val_chord.config(text="--", fg="#5a6677")
                         self.lbl_chord_duration.config(text="Tempo no acorde: 0.00 s", fg="#5a6677")
                         self.lbl_prev_chord.config(text=f"Anterior: {ctx.previous_chord}  |  Conf: 0%", fg="#5a6677")
                         self.lbl_chord_inv.config(text="Aguardando harmonia...", fg="#5a6677")
+                    raw_chord = getattr(ctx, "raw_detected_chord", "--")
+                    raw_conf = getattr(ctx, "raw_chord_confidence", 0.0)
+                    self.lbl_chord_raw.config(
+                        text=f"RAW: {raw_chord}  |  Conf: {int(raw_conf * 100)}%",
+                        fg="#ffffff" if raw_chord != "--" else "#5a6677")
+                    candidate = getattr(ctx, "chord_candidate", "--")
+                    candidate_root = getattr(ctx, "chord_candidate_root", "--")
+                    candidate_conf = getattr(ctx, "chord_candidate_confidence", 0.0)
+                    candidate_age = getattr(ctx, "chord_candidate_age_ms", 0.0)
+                    candidate_frames = getattr(ctx, "chord_candidate_frames", 0)
+                    self.lbl_chord_candidate.config(
+                        text=(f"Candidato: {candidate} (raiz {candidate_root})  |  Conf: {int(candidate_conf * 100)}%  |  "
+                              f"{candidate_age:.0f} ms / {candidate_frames} frames"),
+                        fg="#ffd166" if candidate != "--" else "#5a6677")
+                    expected = getattr(ctx, "expected_chart_chord", "--")
+                    prior_on = getattr(ctx, "chart_prior_enabled", False)
+                    tracking = getattr(ctx, "tracking_state", "TRACKING")
+                    self.lbl_chord_prior.config(
+                        text=f"Cifra: {expected}  |  Prior: {'ON' if prior_on else 'OFF'}  |  {tracking}",
+                        fg="#00e676" if prior_on else "#8c9ba5")
 
                     # 3. Tonalidade Estimada & Tempo no Tom
                     if ctx.key != "--":
