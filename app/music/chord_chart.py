@@ -406,7 +406,13 @@ class ChordChart:
         if not (0 <= index < len(self.sections)):
             raise IndexError("Índice de seção inválido")
         clone = copy.deepcopy(self.sections[index])
-        clone.id = f"{clone.id}_copy"
+        used_ids = {section.id for section in self.sections}
+        base_id = f"{clone.id}_copy"
+        clone.id = base_id
+        suffix = 2
+        while clone.id in used_ids:
+            clone.id = f"{base_id}_{suffix}"
+            suffix += 1
         dest = index + 1 if at is None else max(0, min(len(self.sections), at))
         self.sections.insert(dest, clone)
         self._reindex_bars()

@@ -17,7 +17,7 @@ from app.music.musical_clock import MusicalClock
 from app.music.chord_chart import ChordChart, ChartSection, ChartChord, parse_chord
 from app.input.chart_parser import ChartParser
 from app.input.chart_semantic_classifier import ChartSemanticClassifier
-from app.music.chart_alignment import ChartAlignment, ChartPosition
+from app.music.chart_alignment import ChartAlignment, ChartPosition, StartAnchor
 from app.music.chart_audio_fusion import ChartAudioFusion, FusedMusicalState
 from app.analysis.music_structure_analyzer import MusicStructureAnalyzer
 from app.music.pattern_memory import PatternMemory
@@ -248,6 +248,10 @@ class SongSession:
         return self._current_chart_pos
 
     @property
+    def start_anchor(self) -> Optional[StartAnchor]:
+        return self._alignment.start_anchor
+
+    @property
     def position_estimator(self) -> PositionEstimator:
         return self._position_estimator
 
@@ -275,6 +279,9 @@ class SongSession:
     # Ciclo de Vida e Limpeza
     # ============================================================
     def start(self) -> None:
+        if self._clock.elapsed_time <= 0.0 and not self._is_paused:
+            self._current_chart_pos = self._position_estimator.seek_to_start()
+            self._publish_position(update_structure=False)
         self._is_playing = True
         self._is_paused = False
         if self._performance_state == PerformanceState.ENDED:
@@ -322,6 +329,14 @@ class SongSession:
             next_section=self._current_chart_pos.next_section_name
         )
         self._publish_position(update_structure=False)
+
+    def restart(self) -> ChartPosition:
+        """Restart completo; Pause/Resume continuam preservando a posição."""
+        was_playing = self._is_playing and not self._is_paused
+        self.reset()
+        if was_playing:
+            self.start()
+        return self._current_chart_pos
 
     def close(self) -> None:
         """Libera integralmente todos os recursos e estados da sessão anterior."""
@@ -737,6 +752,10 @@ class SongSession:
         self._publish_position()
         return self._current_chart_pos
 
+    def seek_to_start(self) -> ChartPosition:
+        """Executa Play From Start usando o primeiro evento musical da cifra."""
+        return self.restart()
+
     def next_bar(self) -> ChartPosition:
         return self.seek_to_bar(self.current_bar + 1)
 
@@ -802,6 +821,8 @@ class SongSession:
 
     def update_chart_text(self, new_chart_text: str) -> None:
         """Atualiza a cifra em tempo de execução, re-parseando e sincronizando o alinhamento."""
+        previous_bar = self.current_bar
+        preserve_runtime_position = self._is_playing or self._clock.elapsed_time > 0.0
         self._song.chart_text = new_chart_text
         parsed = ChartParser.parse(
             text=new_chart_text,
@@ -831,5 +852,10 @@ class SongSession:
         self._position_estimator.set_alignment(self._alignment)
         self._position_estimator.set_capo(self._chart.capo_semitones)
         self._position_generation += 1
-        self._current_chart_pos = self._position_estimator.refresh_position()
+        if preserve_runtime_position:
+            self._current_chart_pos = self._position_estimator.seek_to_bar(
+                min(previous_bar, self._alignment.total_bars))
+        else:
+            self._position_estimator.reset()
+            self._current_chart_pos = self._position_estimator.refresh_position()
         self._publish_position()

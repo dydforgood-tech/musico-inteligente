@@ -26,6 +26,7 @@ from app.analysis.tempo_detector import OnsetTempoDetector
 from app.music.musical_context import MusicalContext
 from app.ui.waveform_view import WaveformView
 from app.ui.chroma_view import ChromaView
+from app.ui.edit_history import ChartEditState, EditHistory
 from app.utils.audio_generator import generate_test_song, generate_acoustic_guitar_sample
 from app.utils.timing import LatencyTracker
 from app.instruments import BassPatternType
@@ -89,6 +90,7 @@ class MainWindow:
         self.virtual_players = VirtualPlayerRegistry(bass_player=self.analyzer.bass_player)
         self._follow_mode_enabled = True
         self._has_unsaved_chart_edits = False
+        self._chart_edit_history = EditHistory(limit=100)
 
         # Flags e rastreadores de interface
         self._is_user_dragging_slider = False
@@ -962,6 +964,9 @@ class MainWindow:
         self.root.bind("<Right>", lambda e: None if _is_text_focused() else self._seek_relative(+3.0))
         self.root.bind("<Control-s>", lambda e: self._on_save_chart_direct())
         self.root.bind("<Control-S>", lambda e: self._on_save_chart_direct())
+        self.root.bind("<Control-z>", self._on_undo_shortcut)
+        self.root.bind("<Control-Shift-z>", self._on_redo_shortcut)
+        self.root.bind("<Control-Shift-Z>", self._on_redo_shortcut)
 
     def _on_open_file(self) -> None:
         file_path = filedialog.askopenfilename(
@@ -1081,11 +1086,19 @@ class MainWindow:
         if self._current_source is None:
             messagebox.showinfo("Aviso", "Por favor, abra um arquivo de áudio primeiro.")
             return
+        session = self.project_manager.active_session
+        if session is not None:
+            if session.is_paused:
+                session.resume()
+            else:
+                session.start()
         self.player.play()
         self._update_transport_state(PlaybackState.PLAYING)
 
     def _on_pause(self) -> None:
         self.player.pause()
+        if self.project_manager.active_session is not None:
+            self.project_manager.active_session.pause()
         self._update_transport_state(PlaybackState.PAUSED)
 
     def _on_stop(self) -> None:
@@ -1116,6 +1129,8 @@ class MainWindow:
             self.waveform_view.set_playhead_position(0.0)
             self.seek_var.set(0.0)
             self.lbl_time_cur.config(text="00:00")
+            if self.project_manager.active_session is not None:
+                self.project_manager.active_session.restart()
 
     def _toggle_play_pause(self) -> None:
         if self.player.state == PlaybackState.PLAYING:
@@ -1887,6 +1902,15 @@ class MainWindow:
         )
         btn_discard_chart.pack(side="left", padx=3)
 
+        for _txt, _cmd in (
+            ("↶ Desfazer", self._undo_structural_edit),
+            ("↷ Refazer", self._redo_structural_edit),
+        ):
+            tk.Button(chart_edit_bar, text=_txt, bg="#202735", fg="#ffffff",
+                      activebackground="#2a3344", activeforeground="#ffffff",
+                      font=("Segoe UI", 8), relief="flat", padx=8, pady=2,
+                      cursor="hand2", command=_cmd).pack(side="left", padx=2)
+
         btn_recolor_chart = tk.Button(
             chart_edit_bar,
             text="🎨 Re-colorir",
@@ -1990,6 +2014,9 @@ class MainWindow:
         self.text_chart_view.bind("<KeyRelease>", self._on_chart_key_release)
         self.text_chart_view.bind("<Control-s>", lambda e: (self._on_save_chart_direct(), "break")[1])
         self.text_chart_view.bind("<Control-S>", lambda e: (self._on_save_chart_direct(), "break")[1])
+        self.text_chart_view.bind("<Control-z>", self._on_undo_shortcut)
+        self.text_chart_view.bind("<Control-Shift-z>", self._on_redo_shortcut)
+        self.text_chart_view.bind("<Control-Shift-Z>", self._on_redo_shortcut)
 
         # Barra de Controles Manuais para Ensaio
         rehearsal_bar = tk.Frame(right_pane, bg="#141820", padx=6, pady=3)
@@ -2364,7 +2391,7 @@ class MainWindow:
         if not session:
             return
         if to_start:
-            session.seek_to_bar(1)
+            session.seek_to_start()
         else:
             session.seek_to_bar(session.current_bar + delta)
         self._update_playalong_hud_from_session(session)
@@ -2412,6 +2439,8 @@ class MainWindow:
             messagebox.showwarning("Cifra Vazia", "A cifra não pode ficar completamente vazia.", parent=self.root)
             return
 
+        selected_block = getattr(self, "_selected_block_index", -1)
+        before = ChartEditState(active_song.chart_text, selected_block)
         try:
             updated_song = self.project_manager.update_song_chart(active_song.id, new_text)
         except Exception as exc:
@@ -2419,6 +2448,9 @@ class MainWindow:
             self._set_chart_status("Falha ao salvar; alterações mantidas no editor", "#ff5252")
             messagebox.showerror("Erro ao Salvar Cifra", str(exc), parent=self.root)
             return
+        if hasattr(self, "_chart_edit_history"):
+            self._chart_edit_history.record(
+                before, ChartEditState(new_text, selected_block))
         self._has_unsaved_chart_edits = False
         if hasattr(self, "lbl_chart_edit_status"):
             self.lbl_chart_edit_status.config(text="✓ Cifra salva e sincronizada!", fg="#00e676")
@@ -2602,8 +2634,11 @@ class MainWindow:
             self._set_chart_status("Nenhuma música ativa para transpor", "#ffb703")
             return
         try:
+            before = ChartEditState(song.chart_text, self._selected_block_index)
             self.project_manager.transpose_song(song, target)
-            self._render_chart_text(song)
+            after = ChartEditState(song.chart_text, self._selected_block_index)
+            self._chart_edit_history.record(before, after)
+            self._render_chart_text(song, reset_history=False)
             self._set_chart_status(f"✓ Transposto para {target}", "#00e676")
         except Exception as exc:
             self._set_chart_status(f"Erro ao transpor: {exc}", "#ff5252")
@@ -2672,18 +2707,94 @@ class MainWindow:
     def _commit_blocks(self, preamble, blocks, status: str) -> None:
         """Reconstrói o texto, persiste (se houver música) e re-renderiza, mantendo a seleção."""
         keep_sel = self._selected_block_index
+        before_text = self.text_chart_view.get("1.0", "end-1c")
         new_text = self._rebuild_text_from_blocks(preamble, blocks)
         song = self._active_song()
+        before = ChartEditState(before_text, self._target_block_index(blocks) if blocks else -1)
+        after = ChartEditState(new_text, keep_sel if keep_sel is not None else -1)
         if song:
             self.project_manager.update_song_chart(song.id, new_text)
-            self._render_chart_text(song)  # zera a seleção
+            self._render_chart_text(song, reset_history=False)  # zera a seleção
         else:
             self.text_chart_view.delete("1.0", "end")
             self.text_chart_view.insert("1.0", new_text)
+        self._chart_edit_history.record(before, after)
         # Restaura a seleção do bloco resultante e re-destaca
         self._selected_block_index = keep_sel if keep_sel is not None else -1
         self._apply_chart_syntax_highlighting()
         self._set_chart_status(status, "#00e676")
+
+    def _apply_chart_edit_state(self, state: ChartEditState, status: str) -> None:
+        """Aplica snapshot pela persistência oficial, reconstruindo toda a sessão."""
+        song = self._active_song()
+        if song:
+            self.project_manager.update_song_chart(song.id, state.chart_text)
+            self._render_chart_text(song, reset_history=False)
+        else:
+            self.text_chart_view.delete("1.0", "end")
+            self.text_chart_view.insert("1.0", state.chart_text)
+        self._selected_block_index = state.selected_block_index
+        self._apply_chart_syntax_highlighting()
+        self._has_unsaved_chart_edits = False
+        self._set_chart_status(status, "#00e676")
+
+    def _undo_structural_edit(self) -> bool:
+        state = self._chart_edit_history.undo()
+        if state is None:
+            self._set_chart_status("Nada para desfazer", "#8c9ba5")
+            return False
+        try:
+            self._apply_chart_edit_state(state, "✓ Alteração desfeita e sincronizada")
+        except Exception as exc:
+            self._chart_edit_history.redo()
+            self._set_chart_status(f"Falha ao desfazer: {exc}", "#ff5252")
+            return False
+        return True
+
+    def _redo_structural_edit(self) -> bool:
+        state = self._chart_edit_history.redo()
+        if state is None:
+            self._set_chart_status("Nada para refazer", "#8c9ba5")
+            return False
+        try:
+            self._apply_chart_edit_state(state, "✓ Alteração refeita e sincronizada")
+        except Exception as exc:
+            self._chart_edit_history.undo()
+            self._set_chart_status(f"Falha ao refazer: {exc}", "#ff5252")
+            return False
+        return True
+
+    def _on_undo_shortcut(self, event=None):
+        """Undo nativo no texto; histórico estrutural no restante da aplicação."""
+        focused = self.root.focus_get()
+        if focused is self.text_chart_view:
+            try:
+                self.text_chart_view.edit_undo()
+                self._on_chart_key_release()
+                self._apply_chart_syntax_highlighting()
+                return "break"
+            except tk.TclError:
+                pass
+        elif isinstance(focused, (tk.Text, tk.Entry, ttk.Entry)):
+            return None
+        self._undo_structural_edit()
+        return "break"
+
+    def _on_redo_shortcut(self, event=None):
+        """Redo nativo no texto; histórico estrutural no restante da aplicação."""
+        focused = self.root.focus_get()
+        if focused is self.text_chart_view:
+            try:
+                self.text_chart_view.edit_redo()
+                self._on_chart_key_release()
+                self._apply_chart_syntax_highlighting()
+                return "break"
+            except tk.TclError:
+                pass
+        elif isinstance(focused, (tk.Text, tk.Entry, ttk.Entry)):
+            return None
+        self._redo_structural_edit()
+        return "break"
 
     def _on_copy_block(self) -> None:
         """Duplica o bloco selecionado (ou o do cursor), inserindo a cópia logo após."""
@@ -2727,7 +2838,7 @@ class MainWindow:
         self._selected_block_index = new_idx  # a seleção acompanha o bloco
         self._commit_blocks(preamble, blocks, f"✓ Bloco movido {'▲' if delta < 0 else '▼'}")
 
-    def _render_chart_text(self, song: Song) -> None:
+    def _render_chart_text(self, song: Song, reset_history: bool = True) -> None:
         """Renderiza o texto da cifra formatado com tags coloridas mantendo o editor liberado para edição direta."""
         self._selected_block_index = -1  # nova renderização começa sem bloco selecionado
         self.text_chart_view.config(state="normal")
@@ -2764,6 +2875,8 @@ class MainWindow:
             except Exception:
                 pass
         self._has_unsaved_chart_edits = False
+        if reset_history:
+            self._chart_edit_history.reset(ChartEditState(txt, -1))
         if hasattr(self, "lbl_chart_edit_status"):
             self.lbl_chart_edit_status.config(text="✓ Sincronizado", fg="#00e676")
         if hasattr(self, "btn_save_chart"):

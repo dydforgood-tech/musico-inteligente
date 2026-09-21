@@ -199,15 +199,16 @@ class ChartParser:
 
             # 3. Tablatura — Preservada sem enviar notas como acordes
             if classified.line_type == SemanticLineType.TABLATURE:
-                sec = current_section if current_section is not None else ensure_section("Instrumental", "INSTRUMENTAL", line_num)
-                sec.raw_lines.append(line_str)
-                sec.end_line = max(sec.end_line, line_num)
+                sec = current_section
+                if sec is not None:
+                    sec.raw_lines.append(line_str)
+                    sec.end_line = max(sec.end_line, line_num)
                 line_map.append(ChartLineInfo(
                     line_number=line_num,
                     line_type="TABLATURE",
                     text=line_str,
-                    section_id=sec.id,
-                    section_name=sec.name,
+                    section_id=sec.id if sec else "",
+                    section_name=sec.name if sec else "",
                     start_bar=0,
                     end_bar=0
                 ))
@@ -237,15 +238,16 @@ class ChartParser:
 
             # 5. Anotações de Performance (ex: [Repete 2x], [Entra bateria])
             if classified.line_type == SemanticLineType.ANNOTATION:
-                sec = current_section if current_section is not None else ensure_section("Seção", "UNKNOWN", line_num)
-                sec.raw_lines.append(line_str)
-                sec.end_line = max(sec.end_line, line_num)
+                sec = current_section
+                if sec is not None:
+                    sec.raw_lines.append(line_str)
+                    sec.end_line = max(sec.end_line, line_num)
                 line_map.append(ChartLineInfo(
                     line_number=line_num,
                     line_type="ANNOTATION",
                     text=line_str,
-                    section_id=sec.id,
-                    section_name=sec.name,
+                    section_id=sec.id if sec else "",
+                    section_name=sec.name if sec else "",
                     start_bar=0,
                     end_bar=0
                 ))
@@ -254,15 +256,16 @@ class ChartParser:
 
             # 5.5. Linhas numéricas são conteúdo visual/contagem, nunca eventos.
             if classified.line_type == SemanticLineType.NUMBER:
-                sec = current_section if current_section is not None else ensure_section("Seção", "UNKNOWN", line_num)
-                sec.raw_lines.append(line_str)
-                sec.end_line = max(sec.end_line, line_num)
+                sec = current_section
+                if sec is not None:
+                    sec.raw_lines.append(line_str)
+                    sec.end_line = max(sec.end_line, line_num)
                 line_map.append(ChartLineInfo(
                     line_number=line_num,
                     line_type="NUMBER",
                     text=line_str,
-                    section_id=sec.id,
-                    section_name=sec.name,
+                    section_id=sec.id if sec else "",
+                    section_name=sec.name if sec else "",
                     start_bar=0,
                     end_bar=0
                 ))

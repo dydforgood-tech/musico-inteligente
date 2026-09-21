@@ -136,6 +136,7 @@ class PositionEstimator:
         self._last_search_mode: str = "LOCAL"
         self._last_note_evidence: Dict[str, Any] = {}
         self._startup_lock: bool = True
+        self._start_anchor_confirmed: bool = False
 
         # Última posição consolidada
         self._current_estimated_position: Optional[EstimatedPosition] = None
@@ -144,7 +145,8 @@ class PositionEstimator:
         """Reinicia o estado interno do estimador para o início da música."""
         self._tracking_state = TrackingState.TRACKING
         self._position_confidence = 0.95
-        self._last_confirmed_bar = 1
+        start = self._alignment.get_start_position()
+        self._last_confirmed_bar = start.current_bar
         self._last_confirmed_time = 0.0
         self._last_detected_chord = "--"
         self._consecutive_unknown_seconds = 0.0
@@ -154,8 +156,9 @@ class PositionEstimator:
         self._recent_notes.clear()
         self._recent_harmonic_rhythm.clear()
         self._transposition.reset()
-        self._bar_offset = 0
-        self._chart_cursor_index = 0
+        self._bar_offset = self._clock.bar - start.current_bar
+        anchor = self._alignment.start_anchor
+        self._chart_cursor_index = anchor.event_index if anchor else 0
         self._consumed_chart_events.clear()
         self._completed_sections.clear()
         self._seen_rhythm_markers.clear()
@@ -169,6 +172,7 @@ class PositionEstimator:
         self._last_search_mode = "LOCAL"
         self._last_note_evidence = {}
         self._startup_lock = True
+        self._start_anchor_confirmed = False
         self._current_estimated_position = None
 
     @property
@@ -197,6 +201,10 @@ class PositionEstimator:
     def chart_cursor_index(self) -> int:
         """Evento atualmente ativo na timeline expandida da cifra."""
         return self._chart_cursor_index
+
+    @property
+    def start_anchor_confirmed(self) -> bool:
+        return self._start_anchor_confirmed
 
     @property
     def consumed_chart_events(self) -> Set[int]:
@@ -305,6 +313,10 @@ class PositionEstimator:
             if (reason == "manual seek" or
                     (after.section_index > 0 and reason != "global progression recovery")):
                 self._startup_lock = False
+            anchor = self._alignment.start_anchor
+            if anchor is not None and target > anchor.event_index:
+                self._start_anchor_confirmed = True
+                self._startup_lock = False
 
     def _cursor_state(self, position: ChartPosition) -> ChartPosition:
         key = self._section_key_for_position(position)
@@ -338,6 +350,11 @@ class PositionEstimator:
         last = min(self._alignment.event_count - 1, self._chart_cursor_index + 1)
         for index in range(self._chart_cursor_index, last + 1):
             if self._event_matches(index, detected_chord):
+                anchor = self._alignment.start_anchor
+                if (anchor is not None and index == anchor.event_index and
+                        self._chart_cursor_index == anchor.event_index):
+                    self._start_anchor_confirmed = True
+                    self._startup_lock = False
                 if index > self._chart_cursor_index:
                     if detected_chord == self._pending_next_chord:
                         self._pending_next_observations += 1
@@ -355,9 +372,11 @@ class PositionEstimator:
                         and detected_confidence >= 0.75
                         and len(self._recent_detected) >= 3
                     )
-                    confirmed = (self._pending_next_observations >= 2 or
+                    startup_required = 3 if (self._startup_lock and
+                                              not self._start_anchor_confirmed) else 2
+                    confirmed = (self._pending_next_observations >= startup_required or
                                  recovery_confirmation or
-                                 (detected_confidence >= 0.85 and
+                                 (not self._startup_lock and detected_confidence >= 0.85 and
                                   (duration_ready or elapsed >= 0.75)))
                     if confirmed:
                         self._set_chart_cursor(index, "confirmed expected next chord", absolute_beat)
@@ -395,6 +414,13 @@ class PositionEstimator:
         A posição temporal pode recuperar um trecho sem áudio, mas nunca deve
         competir com um evento harmônico que ainda está sendo confirmado.
         """
+        if self._startup_lock and not self._start_anchor_confirmed:
+            # Protege apenas a janela realmente inicial. Depois de dois beats,
+            # holdover temporal volta a valer para a música não congelar caso o
+            # instrumento entre em silêncio ou o detector permaneça UNKNOWN.
+            if self._clock.total_beats < 2.0:
+                return False
+            self._startup_lock = False
         if temporal.element_index <= self._chart_cursor_index:
             return False
         duration_is_holding = (expected_duration_beats > 0.0 and duration_confidence >= 0.55
@@ -420,10 +446,21 @@ class PositionEstimator:
     def seek_to_bar(self, bar: int) -> ChartPosition:
         """Reancora a cifra manualmente sem alterar o tempo bruto do áudio."""
         target = max(1, min(self._alignment.total_bars, int(bar)))
+        anchor = self._alignment.start_anchor
+        if anchor is not None and target == self._alignment.get_start_position().current_bar:
+            return self.seek_to_start()
         self.reset()
         self._bar_offset = self._clock.bar - target
         self._set_chart_cursor(self._alignment.get_position_at(target).element_index,
                                "manual seek", self._clock.total_beats)
+        return self.refresh_position()
+
+    def seek_to_start(self) -> ChartPosition:
+        """Reinicia no StartAnchor mantendo a busca inicial estritamente local."""
+        self.reset()
+        start = self._alignment.get_start_position(
+            self._clock.beat + self._clock.beat_position, self._clock.elapsed_time)
+        self._bar_offset = self._clock.bar - start.current_bar
         return self.refresh_position()
 
     def _consolidate_position(self, nominal: ChartPosition, detected_chord: str,
@@ -446,7 +483,8 @@ class PositionEstimator:
         """Atualiza o alinhamento estruturado da cifra."""
         self._alignment = alignment
         self._recent_notes.clear()
-        self._chart_cursor_index = 0
+        anchor = alignment.start_anchor
+        self._chart_cursor_index = anchor.event_index if anchor else 0
         self._consumed_chart_events.clear()
         self._completed_sections.clear()
         self._global_recovery_confirmation_pending = False
@@ -455,6 +493,7 @@ class PositionEstimator:
         self._event_start_beat = self._clock.total_beats
         self._has_seen_harmonic_observation = False
         self._startup_lock = True
+        self._start_anchor_confirmed = False
 
     def set_capo(self, semitones: int) -> None:
         """Informa o capotraste (semitons) para comparar o áudio soante com os shapes escritos."""
@@ -627,7 +666,11 @@ class PositionEstimator:
                 self._recent_harmonic_rhythm.clear()
 
             # Degradação suave da confiança temporal
-            if self._consecutive_unknown_seconds > 8.0:
+            if self._startup_lock and not self._start_anchor_confirmed:
+                self._tracking_state = TrackingState.UNCERTAIN
+                self._position_confidence = max(0.70, self._position_confidence - (dt * 0.03))
+                action_note = "STARTING: aguardando confirmação do primeiro evento"
+            elif self._consecutive_unknown_seconds > 8.0:
                 self._tracking_state = TrackingState.LOST
                 self._position_confidence = max(0.40, self._position_confidence - (dt * 0.03))
                 action_note = "Avanço temporal (Detecção ausente há > 8s - LOST)"

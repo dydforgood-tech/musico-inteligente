@@ -85,6 +85,30 @@ class ChartPosition:
         }
 
 
+@dataclass(frozen=True)
+class StartAnchor:
+    """Primeiro evento musical tocável da primeira seção não vazia."""
+
+    section_index: int
+    section_occurrence: int
+    event_index: int
+    line_index: int
+    chord: str
+    section_id: str
+    section_name: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "section_index": self.section_index,
+            "section_occurrence": self.section_occurrence,
+            "event_index": self.event_index,
+            "line_index": self.line_index,
+            "chord": self.chord,
+            "section_id": self.section_id,
+            "section_name": self.section_name,
+        }
+
+
 class ChartAlignment:
     """Motor de alinhamento temporal entre a reprodução musical e o ChordChart."""
 
@@ -93,6 +117,7 @@ class ChartAlignment:
         self._timeline_chords: List[Tuple[int, ChartChord, ChartSection, int, int, int]] = []
         # (bar, chord, section, chord_global_idx, repetition, index_in_occurrence)
         self._total_bars: int = 1
+        self._start_anchor: Optional[StartAnchor] = None
         if chart:
             self._build_timeline()
 
@@ -104,21 +129,30 @@ class ChartAlignment:
     def _build_timeline(self) -> None:
         """Constrói mapa linear ordenado (bar, ChartChord, ChartSection) com expansão de repetições."""
         self._timeline_chords.clear()
+        self._start_anchor = None
         if not self._chart or not self._chart.sections:
             self._total_bars = 1
             return
 
         bar_counter = 1
         global_chord_idx = 0
+        occurrence_counts: Dict[Tuple[str, str], int] = {}
         for sec in self._chart.sections:
+            playable_chords = [
+                chord for chord in sec.chords
+                if ChartSemanticClassifier.is_chord_shaped(chord.symbol.original_symbol)
+            ]
+            if not playable_chords:
+                continue
             for rep in range(sec.repeat_count):
-                for chord_index, c in enumerate(sec.chords):
+                occurrence_key = (sec.section_type.upper(), sec.name.strip().lower())
+                occurrence_counts[occurrence_key] = occurrence_counts.get(occurrence_key, 0) + 1
+                occurrence = occurrence_counts[occurrence_key]
+                for chord_index, c in enumerate(playable_chords):
                     # A timeline do motor é uma allowlist: ChartChord criado por
                     # edição/importação manual ainda precisa provar que é acorde.
-                    if not ChartSemanticClassifier.is_chord_shaped(c.symbol.original_symbol):
-                        continue
                     self._timeline_chords.append(
-                        (bar_counter, c, sec, global_chord_idx, rep + 1, chord_index)
+                        (bar_counter, c, sec, global_chord_idx, occurrence, chord_index)
                     )
                     bar_counter += int(max(1, c.duration_bars))
                     global_chord_idx += 1
@@ -131,10 +165,33 @@ class ChartAlignment:
                     max_line_bar = lm.end_bar
 
         self._total_bars = max(1, max(bar_counter - 1, max_line_bar))
+        if self._timeline_chords:
+            position = self.get_position_for_event(0)
+            self._start_anchor = StartAnchor(
+                section_index=position.section_index,
+                section_occurrence=position.section_occurrence,
+                event_index=position.event_index,
+                line_index=position.line_index,
+                chord=position.current_chord,
+                section_id=position.section_id,
+                section_name=position.section_name,
+            )
 
     @property
     def total_bars(self) -> int:
         return self._total_bars
+
+    @property
+    def start_anchor(self) -> Optional[StartAnchor]:
+        return self._start_anchor
+
+    def get_start_position(self, beat: float = 1.0,
+                           absolute_time: float = 0.0) -> ChartPosition:
+        """Retorna o início musical real, ignorando cabeçalhos e seções vazias."""
+        if self._start_anchor is None:
+            return self.get_position_at(1, beat, absolute_time)
+        return self.get_position_for_event(
+            self._start_anchor.event_index, beat=beat, absolute_time=absolute_time)
 
     def get_line_index_at(self, bar: int) -> int:
         """Mapeia um compasso diretamente para a linha física no editor de texto."""
