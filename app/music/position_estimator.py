@@ -27,6 +27,7 @@ from app.analysis.music_structure_analyzer import MusicStructureAnalyzer
 from app.music.prediction_engine import PredictionEngine
 from app.music.transposition_tracker import TranspositionTracker
 from app.music.harmonic_rhythm import section_key
+from app.input.chart_semantic_classifier import ChartSemanticClassifier
 
 
 class TrackingState(str, Enum):
@@ -447,6 +448,17 @@ class PositionEstimator:
         current_beat = self._clock.beat + self._clock.beat_position
         dt = max(0.0, timestamp - self._last_confirmed_time) if self._last_confirmed_time > 0 else 0.0
         self._last_confirmed_time = timestamp
+
+        # Entradas externas que não provam ser acordes são lixo semântico: não
+        # são UNKNOWN temporal e não podem acionar consumo, busca ou fallback.
+        invalid_input = (bool(detected_chord) and detected_chord not in ("--", "UNKNOWN", "N") and
+                         not ChartSemanticClassifier.is_chord_shaped(detected_chord))
+        if invalid_input:
+            nominal = (self._cursor_state(self._cursor_position(current_beat, timestamp))
+                       if self._alignment.event_count else
+                       self._alignment.get_position_at(self._last_confirmed_bar, current_beat, timestamp))
+            return self._consolidate_position(
+                nominal, "--", 0.0, "Ignored non-musical input", nominal.next_chord)
 
         confident_audio = bool(detected_chord) and detected_chord not in ("--", "UNKNOWN", "N") and detected_confidence >= 0.25
         if harmonic_rhythm_events:

@@ -16,6 +16,7 @@ from app.music.musical_context import MusicalContext
 from app.music.musical_clock import MusicalClock
 from app.music.chord_chart import ChordChart, ChartSection, ChartChord, parse_chord
 from app.input.chart_parser import ChartParser
+from app.input.chart_semantic_classifier import ChartSemanticClassifier
 from app.music.chart_alignment import ChartAlignment, ChartPosition
 from app.music.chart_audio_fusion import ChartAudioFusion, FusedMusicalState
 from app.analysis.music_structure_analyzer import MusicStructureAnalyzer
@@ -121,6 +122,9 @@ class SongSession:
         self._follow_stability = 0.70
         self._last_follow_timestamp: Optional[float] = None
         self._follow_observations_available = False
+        self._last_harmonic_input_diagnostic: Dict[str, Any] = {
+            "raw": "--", "semantic_type": "UNKNOWN", "harmonic_eligible": False, "action": "IGNORED"
+        }
         self._performance_state = PerformanceState.WAITING
         self._last_activity_time: Optional[float] = None
         self._recovery_started_at: Optional[float] = None
@@ -352,6 +356,24 @@ class SongSession:
             timestamp, bpm=bpm_input,
             beat_timestamp=tempo_result.beat_timestamp if tempo_result else None,
             observation_confidence=tempo_result.confidence if tempo_result else 0.0)
+        raw_detected_chord = detected_chord
+        if (detected_chord not in ("", "--", "UNKNOWN", "N") and
+                not ChartSemanticClassifier.is_chord_shaped(detected_chord)):
+            self._last_harmonic_input_diagnostic = {
+                "raw": raw_detected_chord,
+                "semantic_type": ChartSemanticClassifier.classify_line(raw_detected_chord).line_type.value,
+                "harmonic_eligible": False,
+                "action": "IGNORED",
+            }
+            detected_chord = "--"
+            detected_confidence = 0.0
+        else:
+            self._last_harmonic_input_diagnostic = {
+                "raw": raw_detected_chord,
+                "semantic_type": "CHORD" if detected_chord not in ("", "--", "UNKNOWN", "N") else "UNKNOWN",
+                "harmonic_eligible": detected_chord not in ("", "--", "UNKNOWN", "N"),
+                "action": "ACCEPTED" if detected_chord not in ("", "--", "UNKNOWN", "N") else "IGNORED",
+            }
         self._harmonic_rhythm.observe(
             self._clock.total_beats, self._current_chart_pos.section_name,
             detected_chord, detected_confidence)
@@ -637,6 +659,10 @@ class SongSession:
     def get_position_transition_log(self) -> List[Dict[str, Any]]:
         """Log de mudanças reais do cursor; beats, por si só, não entram aqui."""
         return self._position_estimator.position_transition_log
+
+    def get_harmonic_input_diagnostic(self) -> Dict[str, Any]:
+        """Última decisão da barreira entre conteúdo visual e motor harmônico."""
+        return dict(self._last_harmonic_input_diagnostic)
 
     def get_tempo_diagnostics(self) -> Dict[str, Any]:
         return {

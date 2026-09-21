@@ -9,6 +9,7 @@ from typing import Optional, List, Dict, Any, Tuple
 
 from app.music.chord_chart import ChordChart, ChartSection, ChartChord, LyricSegment, ChartLineInfo
 from app.music.musical_clock import MusicalClock
+from app.input.chart_semantic_classifier import ChartSemanticClassifier
 
 
 @dataclass
@@ -112,6 +113,10 @@ class ChartAlignment:
         for sec in self._chart.sections:
             for rep in range(sec.repeat_count):
                 for chord_index, c in enumerate(sec.chords):
+                    # A timeline do motor é uma allowlist: ChartChord criado por
+                    # edição/importação manual ainda precisa provar que é acorde.
+                    if not ChartSemanticClassifier.is_chord_shaped(c.symbol.original_symbol):
+                        continue
                     self._timeline_chords.append(
                         (bar_counter, c, sec, global_chord_idx, rep + 1, chord_index)
                     )

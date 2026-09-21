@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 import re
 
+from app.input.chart_semantic_classifier import ChartSemanticClassifier
+
 
 COMMON_BEAT_DURATIONS = (0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0)
 
@@ -127,7 +129,9 @@ class HarmonicRhythmTracker:
             self._active_chord = "--"
             self._section_events = []
 
-        valid = bool(detected_chord) and detected_chord not in ("--", "UNKNOWN", "N") and chord_confidence >= 0.35
+        valid = (bool(detected_chord) and detected_chord not in ("--", "UNKNOWN", "N") and
+                 chord_confidence >= 0.35 and
+                 ChartSemanticClassifier.is_chord_shaped(detected_chord))
         if valid:
             if self._active_chord == "--":
                 self._active_chord = detected_chord

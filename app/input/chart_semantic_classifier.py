@@ -25,6 +25,7 @@ class SemanticLineType(str, Enum):
     TABLATURE = "TABLATURE"
     ANNOTATION = "ANNOTATION"
     REPEAT = "REPEAT"
+    NUMBER = "NUMBER"
     EMPTY = "EMPTY"
 
 
@@ -417,7 +418,18 @@ class ChartSemanticClassifier:
                 extracted_metadata={"instruction": ann}
             )
 
-        # 6. Avaliação de Acordes vs Letra
+        # 6. Contagens, telefones, anos e outros números nunca são harmonia.
+        # Esta classificação positiva impede que qualquer caminho posterior tente
+        # reinterpretar números como uma sequência de acordes.
+        if re.fullmatch(r'[0-9\s]+', stripped):
+            return ClassifiedLine(
+                line_number=line_number,
+                line_type=SemanticLineType.NUMBER,
+                raw_text=line,
+                cleaned_text=stripped
+            )
+
+        # 7. Avaliação de Acordes vs Letra
         # Tokeniza respeitando posições
         tokens = [t for t in re.split(r'[\s|:,%]+', stripped) if t]
         repeat_count = 1

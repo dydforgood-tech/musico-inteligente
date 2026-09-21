@@ -252,13 +252,36 @@ class ChartParser:
                 i += 1
                 continue
 
+            # 5.5. Linhas numéricas são conteúdo visual/contagem, nunca eventos.
+            if classified.line_type == SemanticLineType.NUMBER:
+                sec = current_section if current_section is not None else ensure_section("Seção", "UNKNOWN", line_num)
+                sec.raw_lines.append(line_str)
+                sec.end_line = max(sec.end_line, line_num)
+                line_map.append(ChartLineInfo(
+                    line_number=line_num,
+                    line_type="NUMBER",
+                    text=line_str,
+                    section_id=sec.id,
+                    section_name=sec.name,
+                    start_bar=current_bar,
+                    end_bar=current_bar
+                ))
+                i += 1
+                continue
+
             # 6. Linha de Acordes (com possível pareamento de linha de letra subsequente)
             if classified.line_type == SemanticLineType.CHORD:
                 sec = current_section if current_section is not None else ensure_section("Intro", "INTRO", line_num)
                 if classified.repeat_count > 1:
                     sec.repeat_count = max(sec.repeat_count, classified.repeat_count)
 
-                chord_tokens = classified.chord_tokens
+                # Defesa adicional: a classificação CHORD só produz eventos
+                # que ainda passam pela allowlist harmônica exata.
+                chord_tokens = [item for item in classified.chord_tokens
+                                if ChartSemanticClassifier.is_chord_shaped(item[0])]
+                if not chord_tokens:
+                    i += 1
+                    continue
                 chord_start_bar = current_bar
 
                 # Verifica se a próxima linha é uma linha de letra casada

@@ -22,6 +22,7 @@ from app.instruments.bass_performance import BassPerformanceEngine
 from app.instruments.bass_synthesizer import BassSynthesizer
 from app.music.musical_context import MusicalContext
 from app.music.chord_chart import parse_chord
+from app.input.chart_semantic_classifier import ChartSemanticClassifier
 from app.music.constants import BASS_DEFAULT_VOLUME
 
 
@@ -216,12 +217,17 @@ class BassPlayer(VirtualInstrument):
 
     def on_musical_context(self, context: MusicalContext) -> Optional[BassNoteEvent]:
         """Processa o contexto musical em tempo real e dispara notas de baixo no instante do tempo musical."""
-        if not self._enabled or context.chord == "--":
+        if (not self._enabled or context.chord == "--" or
+                not ChartSemanticClassifier.is_chord_shaped(context.chord)):
             return None
 
         self._last_context = context
         performance_state = getattr(context, "performance_state", "PLAYING")
         if performance_state in ("HOLDING", "WAITING", "ENDED"):
+            self._synthesizer.cancel_scheduled()
+            return None
+        if (getattr(context, "tracking_state", "TRACKING") == "LOST" and
+                getattr(context, "follow_confidence_level", "MEDIUM") == "LOW"):
             self._synthesizer.cancel_scheduled()
             return None
         if context.tempo_tracking_state != "UNINITIALIZED":

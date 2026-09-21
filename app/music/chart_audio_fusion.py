@@ -11,6 +11,7 @@ from typing import Optional, List, Dict, Any
 
 from app.music.chart_alignment import ChartPosition
 from app.music.chord_chart import parse_chord, ChordSymbol
+from app.input.chart_semantic_classifier import ChartSemanticClassifier
 
 
 @dataclass
@@ -101,6 +102,12 @@ class ChartAudioFusion:
     ) -> FusedMusicalState:
         """Executa a fusão hierárquica entre a posição da cifra e o acorde detectado no áudio."""
         expected = chart_pos.current_chord
+        # Percepção externa só entra na fusão se for um símbolo harmônico válido.
+        # Texto, números e metadados são ausência de observação, nunca variação.
+        if (detected_chord not in ("", "--", "UNKNOWN", "N") and
+                not ChartSemanticClassifier.is_chord_shaped(detected_chord)):
+            detected_chord = "--"
+            chord_confidence = 0.0
         dt = max(0.0, timestamp - self._last_timestamp) if self._last_timestamp is not None else 0.0
         self._last_timestamp = timestamp
 
