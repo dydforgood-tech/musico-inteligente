@@ -17,7 +17,7 @@ recuperação contextual por janela local e correspondência de progressão.
 from collections import deque
 from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Optional, List, Dict, Tuple, Any
+from typing import Optional, List, Dict, Tuple, Any, Set
 
 from app.music.chart_alignment import ChartAlignment, ChartPosition
 from app.music.chord_chart import ChordChart, parse_chord
@@ -118,6 +118,15 @@ class PositionEstimator:
         self._follow_audio: bool = True
         self._bar_offset: int = 0  # chart_bar = clock_bar - offset
 
+        # Cursor de consumo da timeline da cifra. Ele pertence ao estimador
+        # existente: não é uma segunda posição nem um segundo relógio. O cursor
+        # deixa explícito qual evento está ativo e quais já ficaram para trás.
+        self._chart_cursor_index: int = 0
+        self._consumed_chart_events: Set[int] = set()
+        self._completed_sections: Set[Tuple[int, int]] = set()
+        self._seen_rhythm_markers: Set[Tuple[str, float]] = set()
+        self._audio_sequence_requires_recovery: bool = False
+
         # Última posição consolidada
         self._current_estimated_position: Optional[EstimatedPosition] = None
 
@@ -136,6 +145,11 @@ class PositionEstimator:
         self._recent_harmonic_rhythm.clear()
         self._transposition.reset()
         self._bar_offset = 0
+        self._chart_cursor_index = 0
+        self._consumed_chart_events.clear()
+        self._completed_sections.clear()
+        self._seen_rhythm_markers.clear()
+        self._audio_sequence_requires_recovery = False
         self._current_estimated_position = None
 
     @property
@@ -160,6 +174,119 @@ class PositionEstimator:
         """Deslocamento conhecido: musical_bar = clock_bar - bar_offset."""
         return self._bar_offset
 
+    @property
+    def chart_cursor_index(self) -> int:
+        """Evento atualmente ativo na timeline expandida da cifra."""
+        return self._chart_cursor_index
+
+    @property
+    def consumed_chart_events(self) -> Set[int]:
+        """Snapshot dos eventos já consumidos, útil para diagnóstico e testes."""
+        return set(self._consumed_chart_events)
+
+    def _section_key_for_position(self, position: ChartPosition) -> Tuple[int, int]:
+        return position.section_index, position.section_occurrence
+
+    def _cursor_position(self, beat: float, timestamp: float,
+                         nominal_bar: Optional[int] = None) -> ChartPosition:
+        """Posição do evento ativo, preservando o compasso dentro de acordes longos."""
+        position = self._alignment.get_position_for_event(
+            self._chart_cursor_index, beat=beat, absolute_time=timestamp)
+        if nominal_bar is None or self._alignment.event_count <= 0:
+            return position
+        if self._chart_cursor_index + 1 < self._alignment.event_count:
+            next_bar = self._alignment.get_position_for_event(
+                self._chart_cursor_index + 1).current_bar
+            event_end_bar = max(position.current_bar, next_bar - 1)
+        else:
+            event_end_bar = self._alignment.total_bars
+        bar = max(position.current_bar, min(int(nominal_bar), event_end_bar))
+        return self._alignment.get_position_at(bar, beat=beat, absolute_time=timestamp)
+
+    def _set_chart_cursor(self, event_index: int) -> None:
+        """Reposiciona o cursor e atualiza o consumo entre eventos ordenados."""
+        if self._alignment.event_count <= 0:
+            self._chart_cursor_index = 0
+            return
+        target = max(0, min(self._alignment.event_count - 1, int(event_index)))
+        if target > self._chart_cursor_index:
+            for index in range(self._chart_cursor_index, target):
+                old = self._alignment.get_position_for_event(index)
+                self._consumed_chart_events.add(index)
+                new = self._alignment.get_position_for_event(index + 1)
+                if self._section_key_for_position(old) != self._section_key_for_position(new):
+                    self._completed_sections.add(self._section_key_for_position(old))
+        elif target < self._chart_cursor_index:
+            # Reabrir o passado só é permitido após uma relocalização forte; o
+            # chamador é responsável por validar essa evidência.
+            self._consumed_chart_events = {i for i in self._consumed_chart_events if i < target}
+            self._completed_sections = {
+                key for key in self._completed_sections
+                if key[0] < self._alignment.get_position_for_event(target).section_index
+            }
+        self._chart_cursor_index = target
+
+    def _cursor_state(self, position: ChartPosition) -> ChartPosition:
+        key = self._section_key_for_position(position)
+        return replace(
+            position,
+            event_index=position.element_index,
+            next_event_index=(position.element_index + 1
+                              if position.element_index + 1 < self._alignment.event_count else -1),
+            event_state=("CONSUMED" if position.element_index in self._consumed_chart_events else "ACTIVE"),
+            section_state=("CONSUMED" if key in self._completed_sections else "ACTIVE"),
+            next_event_state=("PENDING" if position.element_index + 1 < self._alignment.event_count else "--"),
+        )
+
+    def _event_matches(self, event_index: int, detected_chord: str) -> bool:
+        if not detected_chord or detected_chord in ("--", "UNKNOWN", "N"):
+            return False
+        expected = self._cursor_position(1.0, 0.0) if event_index == self._chart_cursor_index else self._alignment.get_position_for_event(event_index)
+        expected_symbol = parse_chord(self._expected_as_sounding(expected.current_chord))
+        detected_symbol = parse_chord(detected_chord)
+        return self._chords_equal(expected_symbol, detected_symbol) or self._roots_equal(expected_symbol, detected_symbol)
+
+    def _consume_from_audio(self, detected_chord: str) -> bool:
+        """Avança apenas na janela à frente; candidatos consumidos não competem."""
+        if not detected_chord or detected_chord in ("--", "UNKNOWN", "N"):
+            return False
+        # Uma observação isolada só pode confirmar o evento ativo ou o próximo.
+        # Saltos maiores exigem a recuperação por progressão em LOST.
+        last = min(self._alignment.event_count - 1, self._chart_cursor_index + 1)
+        for index in range(self._chart_cursor_index, last + 1):
+            if self._event_matches(index, detected_chord):
+                if index > self._chart_cursor_index:
+                    self._set_chart_cursor(index)
+                return True
+        return False
+
+    def _consume_closed_rhythm_events(self, events) -> bool:
+        """Um evento harmônico fechado confirma o acorde ativo e libera o próximo."""
+        advanced = False
+        for event in events or ():
+            marker = (event.symbol, round(event.start_beat, 3))
+            if marker in self._seen_rhythm_markers:
+                continue
+            self._seen_rhythm_markers.add(marker)
+            if self._event_matches(self._chart_cursor_index, event.symbol):
+                self._set_chart_cursor(self._chart_cursor_index + 1)
+                advanced = True
+        return advanced
+
+    def _consume_temporal_progress(self, temporal: ChartPosition,
+                                   elapsed_beats: float = 0.0,
+                                   expected_duration_beats: float = 0.0,
+                                   duration_confidence: float = 0.0) -> bool:
+        """Mantém a cifra fluindo com áudio desconhecido, respeitando duração aprendida."""
+        if temporal.element_index <= self._chart_cursor_index:
+            return False
+        duration_is_holding = (expected_duration_beats > 0.0 and duration_confidence >= 0.55
+                               and elapsed_beats < expected_duration_beats * 0.85)
+        if duration_is_holding:
+            return False
+        self._set_chart_cursor(temporal.element_index)
+        return True
+
     def refresh_position(self) -> ChartPosition:
         """Reconsulta a cifra usando o offset conhecido, sem nova evidência de áudio."""
         nominal = self._alignment.get_position_at(
@@ -167,6 +294,10 @@ class PositionEstimator:
             self._clock.beat + self._clock.beat_position,
             self._clock.elapsed_time,
         )
+        if self._alignment.event_count:
+            self._consume_temporal_progress(nominal)
+            nominal = self._cursor_state(self._cursor_position(
+                self._clock.beat + self._clock.beat_position, self._clock.elapsed_time))
         return self._consolidate_position(nominal, "--", 0.0, "Posição atualizada", nominal.next_chord)
 
     def seek_to_bar(self, bar: int) -> ChartPosition:
@@ -174,6 +305,7 @@ class PositionEstimator:
         target = max(1, min(self._alignment.total_bars, int(bar)))
         self.reset()
         self._bar_offset = self._clock.bar - target
+        self._set_chart_cursor(self._alignment.get_position_at(target).element_index)
         return self.refresh_position()
 
     def _consolidate_position(self, nominal: ChartPosition, detected_chord: str,
@@ -196,6 +328,10 @@ class PositionEstimator:
         """Atualiza o alinhamento estruturado da cifra."""
         self._alignment = alignment
         self._recent_notes.clear()
+        self._chart_cursor_index = 0
+        self._consumed_chart_events.clear()
+        self._completed_sections.clear()
+        self._audio_sequence_requires_recovery = False
 
     def set_capo(self, semitones: int) -> None:
         """Informa o capotraste (semitons) para comparar o áudio soante com os shapes escritos."""
@@ -217,6 +353,9 @@ class PositionEstimator:
         detected_note: str = "--",
         note_confidence: float = 0.0,
         harmonic_rhythm_events=None,
+        current_chord_elapsed_beats: float = 0.0,
+        expected_chord_duration_beats: float = 0.0,
+        duration_confidence: float = 0.0,
     ) -> ChartPosition:
         """Atualiza a estimativa de posição: o ÁUDIO localiza onde estamos na cifra."""
         # 1. Tempo contínuo (o relógio dá o avanço suave; o áudio decide o LUGAR)
@@ -232,18 +371,41 @@ class PositionEstimator:
                 if not self._recent_harmonic_rhythm or self._recent_harmonic_rhythm[-1][0] != marker:
                     self._recent_harmonic_rhythm.append((marker, event))
 
+        # O relógio continua sendo a referência temporal. A diferença é que ele
+        # agora consome a timeline ordenada, em vez de voltar a procurar acordes
+        # iguais no documento inteiro a cada frame.
+        temporal_pos = self._alignment.get_position_at(
+            max(1, clock_bar - self._bar_offset), current_beat, timestamp)
+        self._consume_closed_rhythm_events(harmonic_rhythm_events)
+        self._consume_temporal_progress(
+            temporal_pos, current_chord_elapsed_beats,
+            expected_chord_duration_beats, duration_confidence)
+
         # Registra o acorde detectado (buffer para localização por progressão)
         chord_changed = confident_audio and (not self._recent_detected or self._recent_detected[-1] != detected_chord)
         if chord_changed:
             self._recent_detected.append(detected_chord)
+            if self._follow_audio:
+                if not self._consume_from_audio(detected_chord):
+                    self._audio_sequence_requires_recovery = True
 
         # 1.5. LOCALIZAÇÃO POR ÁUDIO — encaixa a posição onde a progressão recente casa
         # na cifra, reancorando o deslocamento relógio→cifra. É isto que faz o programa
         # SEGUIR o músico em vez de apenas percorrer a cifra em ordem pelo tempo.
         localize_note = ""
         if self._follow_audio and chord_changed:
-            tentative_bar = max(1, clock_bar - self._bar_offset)
-            loc = self._global_localize(near_bar=tentative_bar)
+            tentative_bar = self._cursor_position(
+                current_beat, timestamp, max(1, clock_bar - self._bar_offset)).current_bar
+            # Busca global é uma recuperação excepcional. Uma progressão longa
+            # sem candidato local declara perda real da posição antes de buscar
+            # no documento inteiro; a operação normal permanece local e
+            # monotônica pelo cursor.
+            no_local_candidate = (self._audio_sequence_requires_recovery or
+                                  not self._consume_from_audio(detected_chord))
+            if no_local_candidate and len(self._recent_detected) >= 4:
+                self._tracking_state = TrackingState.LOST
+            loc = (self._global_localize(near_bar=tentative_bar)
+                   if self._tracking_state == TrackingState.LOST else None)
             if loc is not None:
                 loc_bar, loc_score, loc_len = loc
                 distance = abs(loc_bar - tentative_bar)
@@ -255,26 +417,32 @@ class PositionEstimator:
                     or (distance > 2 and loc_len >= 3 and loc_score >= 0.78)
                 )
                 if strong_enough and distance >= 1:
-                    self._bar_offset = clock_bar - loc_bar
-                    self._recent_notes.clear()
-                    localize_note = (
-                        f"Localizado pelo áudio no Comp. {loc_bar} "
-                        f"({loc_len} acordes, {int(loc_score * 100)}%)"
-                    )
+                    target_event = self._alignment.get_position_at(loc_bar).element_index
+                    # Saltos para trás precisam de uma progressão forte e longa.
+                    if target_event >= self._chart_cursor_index or (loc_len >= 3 and loc_score >= 0.90):
+                        self._set_chart_cursor(target_event)
+                        self._bar_offset = clock_bar - loc_bar
+                        self._recent_notes.clear()
+                        self._audio_sequence_requires_recovery = False
+                        localize_note = (
+                            f"Localizado pelo áudio no Comp. {loc_bar} "
+                            f"({loc_len} acordes, {int(loc_score * 100)}%)"
+                        )
 
-        current_bar = max(1, clock_bar - self._bar_offset)
+        raw_chart_bar = max(1, clock_bar - self._bar_offset)
+        current_bar = (self._cursor_position(current_beat, timestamp, raw_chart_bar).current_bar
+                       if self._alignment.event_count else raw_chart_bar)
         note_match = self._locate_note_sequence(timestamp, detected_note, note_confidence, current_bar)
         if note_match is not None:
             current_bar = note_match
             self._bar_offset = clock_bar - current_bar
+            self._set_chart_cursor(self._alignment.get_position_at(current_bar).element_index)
             localize_note = f"Localizado por sequência de notas no Comp. {current_bar}"
 
         # Consulta posição nominal na cifra pelo compasso localizado
-        nominal_pos = self._alignment.get_position_at(
-            bar=current_bar,
-            beat=current_beat,
-            absolute_time=timestamp
-        )
+        nominal_pos = (self._cursor_state(self._cursor_position(current_beat, timestamp, raw_chart_bar))
+                       if self._alignment.event_count else
+                       self._alignment.get_position_at(current_bar, current_beat, timestamp))
         expected_chord = nominal_pos.current_chord
 
         # Registra no buffer de histórico
@@ -413,7 +581,9 @@ class PositionEstimator:
                             self._position_confidence = min(0.88, self._position_confidence + 0.10)
                             # Se for uma pequena diferença de 1 compasso, atualiza o compasso
                             current_bar = matched_bar
-                            nominal_pos = self._alignment.get_position_at(current_bar, current_beat, timestamp)
+                            self._set_chart_cursor(self._alignment.get_position_at(current_bar).element_index)
+                            nominal_pos = self._cursor_state(self._cursor_position(
+                                current_beat, timestamp, current_bar))
                             effective_chord = matched_chord
                         else:
                             action_note = f"Candidato local descartado (Comp. {matched_bar} fora da tolerância)"
@@ -429,7 +599,9 @@ class PositionEstimator:
                         if prog and prog.confidence >= 0.75 and -1 <= (prog.end_bar - current_bar) <= 3:
                             self._tracking_state = TrackingState.RECOVERING
                             current_bar = prog.end_bar
-                            nominal_pos = self._alignment.get_position_at(current_bar, current_beat, timestamp)
+                            self._set_chart_cursor(self._alignment.get_position_at(current_bar).element_index)
+                            nominal_pos = self._cursor_state(self._cursor_position(
+                                current_beat, timestamp, current_bar))
                             effective_chord = nominal_pos.current_chord
                             self._position_confidence = min(0.90, self._position_confidence + 0.15)
                             action_note = (
@@ -446,6 +618,7 @@ class PositionEstimator:
                 self._tracking_state = TrackingState.RECOVERING
 
         # Todas as recuperações, inclusive as locais, persistem na mesma transformação.
+        current_bar = nominal_pos.current_bar
         self._bar_offset = clock_bar - current_bar
         return self._consolidate_position(
             nominal_pos, detected_chord if not is_unknown_audio else "--",
@@ -478,17 +651,17 @@ class PositionEstimator:
     def _chart_chord_sequence(self):
         """Sequência (bar, símbolo, parse) dos acordes da cifra no domínio SOANTE (capo).
 
-        Remove repetições consecutivas para casar progressões independentemente da duração.
+        Preserva cada evento expandido, inclusive acordes consecutivos iguais e
+        repetições declaradas. A duração pertence ao ritmo harmônico; a ordem
+        pertence à cifra e não pode ser colapsada durante uma relocalização.
         """
         seq = []
-        total = self._alignment.total_bars
-        for b in range(1, total + 1):
-            pos = self._alignment.get_position_at(b)
+        for event_index in range(self._alignment.event_count):
+            pos = self._alignment.get_position_for_event(event_index)
             ch = pos.current_chord
             if ch and ch != "--":
-                if not seq or seq[-1][1] != ch:
-                    seq.append((b, ch, parse_chord(self._expected_as_sounding(ch)),
-                                pos.section_name, pos.chord_index_in_section))
+                seq.append((pos.current_bar, ch, parse_chord(self._expected_as_sounding(ch)),
+                            pos.section_name, pos.section_event_index))
         return seq
 
     @staticmethod

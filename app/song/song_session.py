@@ -366,7 +366,10 @@ class SongSession:
                 detected_confidence=detected_confidence, detected_key=detected_key,
                 detected_note=source_context.note if source_context is not None else "--",
                 note_confidence=source_context.note_confidence if source_context is not None else 0.0,
-                harmonic_rhythm_events=self._harmonic_rhythm.timeline)
+                harmonic_rhythm_events=self._harmonic_rhythm.timeline,
+                current_chord_elapsed_beats=self._harmonic_rhythm.state.current_elapsed_beats,
+                expected_chord_duration_beats=self._harmonic_rhythm.state.expected_chord_duration_beats,
+                duration_confidence=self._harmonic_rhythm.state.duration_confidence)
             if self._position_estimator.bar_offset != old_offset:
                 self._position_generation += 1
             if activity and self._current_chart_pos.confidence >= 0.50:
@@ -597,6 +600,13 @@ class SongSession:
             "line_index": self.chart_position.line_index,
             "section": self.chart_position.section_name, "tracking_state": self.tracking_state,
             "bar_offset": self._position_estimator.bar_offset,
+            "event_index": self.chart_position.event_index,
+            "section_event_index": self.chart_position.section_event_index,
+            "section_occurrence": self.chart_position.section_occurrence,
+            "event_state": self.chart_position.event_state,
+            "next_event_state": self.chart_position.next_event_state,
+            "section_state": self.chart_position.section_state,
+            "next_event": self.chart_position.next_chord,
             "expected_chord": self.expected_chord, "detected_chord": self.detected_chord,
             "performance_state": self.performance_state,
         }
@@ -607,6 +617,10 @@ class SongSession:
             f"CLOCK: Bar {data['clock_bar']} Beat {data['clock_beat']} | "
             f"MUSICAL POSITION: Bar {data['current_bar']} Beat {data['current_beat']} | "
             f"CHART LINE: {data['line_index']} | SECTION: {data['section']} | "
+            f"EVENT: {data['event_index']} ({data['event_state']}) → {data['next_event']} "
+            f"({data['next_event_state']}) | "
+            f"SECTION EVENT: {data['section_event_index']} / occurrence {data['section_occurrence']} "
+            f"({data['section_state']}) | NEXT: {data['next_event']} | "
             f"TRACKING: {data['tracking_state']} | BAR OFFSET: {data['bar_offset']:+d} | "
             f"EXPECTED: {data['expected_chord']} | DETECTED: {data['detected_chord']}"
             f" | PERFORMANCE: {data['performance_state']}"

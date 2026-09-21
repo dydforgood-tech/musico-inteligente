@@ -29,6 +29,17 @@ class ChartPosition:
     chord_index_in_section: int = 0
     chord_index: int = 0
     element_index: int = 0
+    # Índices explícitos do evento na timeline expandida. ``element_index`` é
+    # mantido por compatibilidade; os novos nomes tornam o contrato de cursor
+    # consumível pelos seguidores musicais mais claro.
+    event_index: int = 0
+    next_event_index: int = -1
+    section_event_index: int = 0
+    section_event_count: int = 0
+    section_occurrence: int = 1
+    event_state: str = "ACTIVE"       # PENDING, ACTIVE ou CONSUMED
+    section_state: str = "ACTIVE"     # PENDING, ACTIVE ou CONSUMED
+    next_event_state: str = "PENDING"
     line_index: int = 1                 # Número da linha 1-indexada no texto original da cifra
     section_progress: float = 0.0
     bars_until_chord_change: int = 0
@@ -53,6 +64,14 @@ class ChartPosition:
             "chord_index_in_section": self.chord_index_in_section,
             "chord_index": self.chord_index,
             "element_index": self.element_index,
+            "event_index": self.event_index,
+            "next_event_index": self.next_event_index,
+            "section_event_index": self.section_event_index,
+            "section_event_count": self.section_event_count,
+            "section_occurrence": self.section_occurrence,
+            "event_state": self.event_state,
+            "section_state": self.section_state,
+            "next_event_state": self.next_event_state,
             "line_index": self.line_index,
             "section_progress": round(self.section_progress, 3),
             "bars_until_chord_change": self.bars_until_chord_change,
@@ -70,7 +89,8 @@ class ChartAlignment:
 
     def __init__(self, chart: Optional[ChordChart] = None):
         self._chart = chart
-        self._timeline_chords: List[Tuple[int, ChartChord, ChartSection, int]] = [] # (bar, chord, section, chord_global_idx)
+        self._timeline_chords: List[Tuple[int, ChartChord, ChartSection, int, int, int]] = []
+        # (bar, chord, section, chord_global_idx, repetition, index_in_occurrence)
         self._total_bars: int = 1
         if chart:
             self._build_timeline()
@@ -91,8 +111,10 @@ class ChartAlignment:
         global_chord_idx = 0
         for sec in self._chart.sections:
             for rep in range(sec.repeat_count):
-                for c in sec.chords:
-                    self._timeline_chords.append((bar_counter, c, sec, global_chord_idx))
+                for chord_index, c in enumerate(sec.chords):
+                    self._timeline_chords.append(
+                        (bar_counter, c, sec, global_chord_idx, rep + 1, chord_index)
+                    )
                     bar_counter += int(max(1, c.duration_bars))
                     global_chord_idx += 1
 
@@ -140,6 +162,19 @@ class ChartAlignment:
 
         return 1
 
+    @property
+    def event_count(self) -> int:
+        """Quantidade de eventos de acorde após expandir as repetições declaradas."""
+        return len(self._timeline_chords)
+
+    def get_position_for_event(self, event_index: int, beat: float = 1.0,
+                               absolute_time: float = 0.0) -> ChartPosition:
+        """Consulta um evento pela sua ordem real na cifra, incluindo repetições."""
+        if not self._timeline_chords:
+            return self.get_position_at(1, beat, absolute_time)
+        index = max(0, min(len(self._timeline_chords) - 1, int(event_index)))
+        return self.get_position_at(self._timeline_chords[index][0], beat, absolute_time)
+
     def get_position_at(self, bar: int, beat: float = 1.0, absolute_time: float = 0.0) -> ChartPosition:
         """Consulta a posição correspondente na cifra para um dado compasso e tempo."""
         line_idx = self.get_line_index_at(bar)
@@ -154,7 +189,7 @@ class ChartAlignment:
 
         current_idx = -1
         # Busca o acorde ativo para este compasso
-        for idx, (b, ch, sec, g_idx) in enumerate(self._timeline_chords):
+        for idx, (b, ch, sec, g_idx, occurrence, section_event_idx) in enumerate(self._timeline_chords):
             if b <= bar:
                 current_idx = idx
             else:
@@ -163,7 +198,8 @@ class ChartAlignment:
         if current_idx == -1:
             current_idx = 0
 
-        bar_start, chord_obj, section_obj, chord_global_idx = self._timeline_chords[current_idx]
+        (bar_start, chord_obj, section_obj, chord_global_idx,
+         occurrence, section_event_idx) = self._timeline_chords[current_idx]
 
         # Próximo acorde
         next_chord_str = "--"
@@ -173,9 +209,11 @@ class ChartAlignment:
             bars_to_chord_change = max(1, self._timeline_chords[current_idx + 1][0] - bar)
 
         # Seção e progresso
-        sec_chords = [item for item in self._timeline_chords if item[2].id == section_obj.id]
+        sec_chords = [item for item in self._timeline_chords
+                      if item[2].id == section_obj.id and item[4] == occurrence]
         first_bar_sec = sec_chords[0][0] if sec_chords else bar_start
-        last_bar_sec = sec_chords[-1][0] + int(sec_chords[-1][1].duration_bars) if sec_chords else bar_start + 1
+        last_bar_sec = (sec_chords[-1][0] + int(sec_chords[-1][1].duration_bars)
+                        if sec_chords else bar_start + 1)
         sec_duration = max(1, last_bar_sec - first_bar_sec)
         sec_progress = max(0.0, min(1.0, (bar - first_bar_sec) / sec_duration))
         bars_to_sec_change = max(0, last_bar_sec - bar)
@@ -183,7 +221,7 @@ class ChartAlignment:
         # Próxima seção
         next_sec_name = "--"
         for item in self._timeline_chords[current_idx + 1:]:
-            if item[2].id != section_obj.id:
+            if item[2].id != section_obj.id or item[4] != occurrence:
                 next_sec_name = item[2].name
                 break
 
@@ -212,9 +250,14 @@ class ChartAlignment:
             current_chord=chord_obj.symbol.original_symbol,
             next_chord=next_chord_str,
             next_section_name=next_sec_name,
-            chord_index_in_section=sec_chords.index((bar_start, chord_obj, section_obj, chord_global_idx)) if (bar_start, chord_obj, section_obj, chord_global_idx) in sec_chords else 0,
+            chord_index_in_section=section_event_idx,
             chord_index=chord_global_idx,
             element_index=current_idx,
+            event_index=current_idx,
+            next_event_index=(current_idx + 1 if current_idx + 1 < len(self._timeline_chords) else -1),
+            section_event_index=section_event_idx,
+            section_event_count=len(sec_chords),
+            section_occurrence=occurrence,
             line_index=final_line_idx,
             section_progress=sec_progress,
             bars_until_chord_change=bars_to_chord_change,
