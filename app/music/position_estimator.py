@@ -26,6 +26,7 @@ from app.music.musical_clock import MusicalClock
 from app.analysis.music_structure_analyzer import MusicStructureAnalyzer
 from app.music.prediction_engine import PredictionEngine
 from app.music.transposition_tracker import TranspositionTracker
+from app.music.harmonic_rhythm import section_key
 
 
 class TrackingState(str, Enum):
@@ -104,6 +105,7 @@ class PositionEstimator:
         self._recent_detected: deque = deque(maxlen=8)
         self._recent_expected: deque = deque(maxlen=8)
         self._recent_notes: deque = deque(maxlen=5)
+        self._recent_harmonic_rhythm: deque = deque(maxlen=4)
 
         # Detector de transposição/capotraste global entre a cifra e a execução
         self._transposition = TranspositionTracker()
@@ -131,6 +133,7 @@ class PositionEstimator:
         self._recent_detected.clear()
         self._recent_expected.clear()
         self._recent_notes.clear()
+        self._recent_harmonic_rhythm.clear()
         self._transposition.reset()
         self._bar_offset = 0
         self._current_estimated_position = None
@@ -213,6 +216,7 @@ class PositionEstimator:
         detected_key: str = "--",
         detected_note: str = "--",
         note_confidence: float = 0.0,
+        harmonic_rhythm_events=None,
     ) -> ChartPosition:
         """Atualiza a estimativa de posição: o ÁUDIO localiza onde estamos na cifra."""
         # 1. Tempo contínuo (o relógio dá o avanço suave; o áudio decide o LUGAR)
@@ -222,6 +226,11 @@ class PositionEstimator:
         self._last_confirmed_time = timestamp
 
         confident_audio = bool(detected_chord) and detected_chord not in ("--", "UNKNOWN", "N") and detected_confidence >= 0.25
+        if harmonic_rhythm_events:
+            for event in harmonic_rhythm_events:
+                marker = (event.symbol, round(event.start_beat, 3))
+                if not self._recent_harmonic_rhythm or self._recent_harmonic_rhythm[-1][0] != marker:
+                    self._recent_harmonic_rhythm.append((marker, event))
 
         # Registra o acorde detectado (buffer para localização por progressão)
         chord_changed = confident_audio and (not self._recent_detected or self._recent_detected[-1] != detected_chord)
@@ -478,7 +487,8 @@ class PositionEstimator:
             ch = pos.current_chord
             if ch and ch != "--":
                 if not seq or seq[-1][1] != ch:
-                    seq.append((b, ch, parse_chord(self._expected_as_sounding(ch))))
+                    seq.append((b, ch, parse_chord(self._expected_as_sounding(ch)),
+                                pos.section_name, pos.chord_index_in_section))
         return seq
 
     @staticmethod
@@ -563,12 +573,32 @@ class PositionEstimator:
             # Pontuação tolerante à tônica (1.0 exato, 0.8 só pela raiz)
             score_sum = sum(self._match_score(window[j][2], recent_syms[j]) for j in range(L))
             ratio = score_sum / L
-            if ratio >= 0.75:
+            duration_score = None
+            # Duração é uma segunda evidência independente, não substitui os
+            # acordes. Só entra após um padrão já ter sido observado na seção.
+            if self._structure_analyzer is not None and self._recent_harmonic_rhythm:
+                observed = [entry[1] for entry in self._recent_harmonic_rhythm]
+                count = min(len(observed), L)
+                first = window[:count]
+                expected_durations = []
+                for candidate in first:
+                    pattern = self._structure_analyzer.pattern_memory.find_harmonic_rhythm(
+                        section_key(candidate[3]), candidate[1], candidate[4])
+                    if pattern is None or pattern.confidence < .55 or candidate[4] >= len(pattern.duration_sequence):
+                        expected_durations = []
+                        break
+                    expected_durations.append(pattern.duration_sequence[candidate[4]])
+                if expected_durations:
+                    scores = [max(0.0, 1.0 - abs(obs.quantized_duration_beats - exp) / max(1.0, exp))
+                              for obs, exp in zip(observed[-count:], expected_durations)]
+                    duration_score = sum(scores) / len(scores)
+            combined = ratio if duration_score is None else (0.65 * ratio + 0.35 * duration_score)
+            if combined >= 0.75:
                 end_bar = window[-1][0]
                 dist = abs(end_bar - near_bar)
-                key = (ratio, -dist)
+                key = (combined, -dist)
                 if best is None or key > best[0]:
-                    best = (key, end_bar, ratio, L)
+                    best = (key, end_bar, combined, L)
         if best is None:
             return None
         return best[1], best[2], best[3]

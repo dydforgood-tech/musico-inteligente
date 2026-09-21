@@ -54,7 +54,7 @@ Execute na raiz:
 python -B -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-A suíte atual passou em 254 testes, incluindo confiança consolidada e compensação de 20, 50, 100 e 200 ms. Execute a suíte completa após qualquer alteração.
+A suíte atual passou em 261 testes, incluindo confiança consolidada, compensação de 20, 50, 100 e 200 ms e ritmo harmônico. Execute a suíte completa após qualquer alteração.
 A suíte inclui um teste Tkinter e precisa de sessão gráfica; em Linux sem tela,
 use um display virtual. A passagem dos testes não substitui audição e testes de hardware.
 As amostras WAV incluídas são geradas pelo próprio projeto.
@@ -201,3 +201,28 @@ perto do final da cifra; silêncio no meio nunca vira `ENDED`. Ao terminar,
 eventos futuros são cancelados e a sessão segue disponível para `start()` e
 replay. A atividade vem do RMS do áudio, nota/acorde confiáveis ou pulso
 observado; chamadas sem sinal de áudio não são tratadas como silêncio.
+
+## Ritmo harmônico e aprendizado temporal por seção
+
+O `ChartParser` mantém uma duração nominal de um compasso por acorde quando a
+cifra não informa duração. Essa é somente a grade estrutural inicial;
+`HarmonicRhythmTracker` mede o que foi executado em `MusicalClock.total_beats`.
+Ele recebe acordes já estabilizados, conserva o acorde vigente durante
+`UNKNOWN`, e fecha eventos com duração bruta e quantizada.
+
+Valores próximos de 0,5, 1, 1,5, 2, 3, 4, 6 e 8 beats são quantizados com
+tolerância proporcional; os demais ficam em passos de 0,25 beat. Ao fim de
+uma seção, `PatternMemory` aprende sua sequência e duração. Outliers recebem
+ganho reduzido e a variância por acorde permanece registrada.
+
+Na ocorrência seguinte, o tracker publica duração esperada, beats até a troca,
+acorde seguinte e confiança. `PositionEstimator` combina 65% de sequência
+harmônica e 35% de duração somente para padrões com confiança mínima de 0,55.
+Isso diferencia Intro `G(8) D(8) Em(8)` de Verse `G(4) D(2) Em(2)` mantendo o
+prior de continuidade. `PredictionEngine` e `BassPlayer` usam a mesma previsão
+em beats; o baixo só prepara troca intra-compasso quando o padrão é confiável.
+
+`SongSession.format_harmonic_rhythm_diagnostics()` mostra seção, acorde,
+duração, próxima troca e confianças. A timeline consultável conserva beat
+inicial, acorde, duração bruta, quantizada e confiança. O contexto também
+mantém acorde bruto e estabilizado para diagnóstico do reconhecimento.

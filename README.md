@@ -49,6 +49,7 @@ Estrutura central que representa o estado musical instantâneo e temporal:
 - **Tonalidade (Key)**: `key`, `previous_key`, `key_start_time`, `key_duration`, `key_confidence`.
 - **Relógio Musical (MusicalClock)**: `bpm`, `meter`, `bar` (compasso), `beat` (tempo 1 a 4), `beat_position` (fase [0..1)), `is_beat` (pulso).
 - **Follow Confidence**: score consolidado e nível `HIGH`, `MEDIUM` ou `LOW`, com tempo/fase, posição, harmonia, cifra e estabilidade recente.
+- **Ritmo Harmônico**: aprende quanto cada acorde permanece em beats por seção durante a sessão, sem confundir duração harmônica com BPM.
 - **Latência do pipeline**: `capture_latency`, `analysis_latency`, `processing_latency`, `decision_latency`, `scheduling_latency`, `output_latency` e `total_estimated_latency`.
 
 ### 2. `ChordHistory` e Estabilizador Temporal (`app/analysis/chord_history.py`)
@@ -118,7 +119,7 @@ Você também pode abrir qualquer arquivo seu de violão ou teclado em formato *
 
 ---
 
-## 🧪 Suíte de Testes Automatizados (249 Testes)
+## 🧪 Suíte de Testes Automatizados (261 Testes)
 
 Execute todos os testes unitários e de integração com o comando:
 
@@ -260,7 +261,7 @@ No visualizador de cifra (aba **Músico Play-Along & Cifra**):
 ## Desenvolvimento e colaboração
 
 Leia [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) para entender a arquitetura,
-os cuidados com dados locais e como validar mudanças. A suíte atual contém 249 testes.
+os cuidados com dados locais e como validar mudanças. A suíte atual contém 261 testes.
 O repertório `virtual_band_project.json` é local e não é enviado ao GitHub.
 A interface restaura esse arquivo ao iniciar; sem ele, cria músicas de demonstração.
 

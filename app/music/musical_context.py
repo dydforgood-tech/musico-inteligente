@@ -51,6 +51,8 @@ class MusicalContext:
     inversion: str = "root"                     # "root", "first", "second"
     detected_notes: List[str] = field(default_factory=list)  # Ex: ["C", "E", "G"]
     chord_confidence: float = 0.0               # Confiança do acorde (0.0 a 1.0)
+    raw_detected_chord: str = "--"             # Saída do classificador antes da estabilização
+    smoothed_detected_chord: str = "--"        # Saída do ChordStabilizer
 
     # Contexto Temporal do Acorde
     previous_chord: str = "--"                  # Acorde imediatamente anterior confirmado
@@ -125,6 +127,14 @@ class MusicalContext:
     beats_until_change: int = 0                 # Quantidade de tempos até a mudança
     prediction_confidence: float = 0.0          # Confiança da predição
     prediction_reason: str = "--"               # Justificativa probabilística da predição
+    current_chord_elapsed_beats: float = 0.0     # Duração observada no relógio musical
+    expected_chord_duration_beats: float = 0.0   # Perfil temporal aprendido; 0 se ainda desconhecido
+    beats_until_chord_change: float = 0.0
+    duration_confidence: float = 0.0
+    pattern_confidence: float = 0.0
+    harmonic_rhythm_pattern: str = "--"
+    harmonic_rhythm_observations: int = 0
+    rhythmic_next_chord: str = "--"
 
     # Diagnóstico temporal; bar/beat são sempre as coordenadas musicais publicadas.
     clock_bar: int = 1
@@ -193,6 +203,8 @@ class MusicalContext:
         self.inversion = "root"
         self.detected_notes.clear()
         self.chord_confidence = 0.0
+        self.raw_detected_chord = "--"
+        self.smoothed_detected_chord = "--"
 
         self.previous_chord = "--"
         self.chord_start_time = 0.0
@@ -250,6 +262,14 @@ class MusicalContext:
         self.beats_until_change = 0
         self.prediction_confidence = 0.0
         self.prediction_reason = "--"
+        self.current_chord_elapsed_beats = 0.0
+        self.expected_chord_duration_beats = 0.0
+        self.beats_until_chord_change = 0.0
+        self.duration_confidence = 0.0
+        self.pattern_confidence = 0.0
+        self.harmonic_rhythm_pattern = "--"
+        self.harmonic_rhythm_observations = 0
+        self.rhythmic_next_chord = "--"
 
     def get_summary_dict(self) -> Dict:
         """Retorna uma visão estruturada pronta para consumo por instrumentos virtuais."""

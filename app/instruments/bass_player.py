@@ -120,6 +120,9 @@ class BassPlayer(VirtualInstrument):
             "current_chord": ctx.chord, "next_chord": ctx.next_expected_chord,
             "current_bar": ctx.bar, "current_beat": ctx.beat,
             "next_change_position": (ctx.next_change_bar, ctx.next_change_beat),
+            "current_chord_elapsed_beats": ctx.current_chord_elapsed_beats,
+            "expected_chord_duration_beats": ctx.expected_chord_duration_beats,
+            "beats_until_change": ctx.beats_until_chord_change,
             "current_section": ctx.current_section,
             "next_section": ctx.next_expected_section,
             "tracking_confidence": ctx.position_confidence,
@@ -330,6 +333,14 @@ class BassPlayer(VirtualInstrument):
                               (context.next_change_bar == 0 or bar >= context.next_change_bar))
         next_chord = context.next_expected_chord if chart_changes_here else context.chord
         source = "chart" if context.chart_available or context.next_expected_chord != "--" else "audio"
+        beats_to_target = max(0.0, (start_time - context.timestamp) / beat_duration)
+        rhythm_changes_here = (
+            context.rhythmic_next_chord != "--" and
+            context.duration_confidence >= 0.55 and context.pattern_confidence >= 0.55 and
+            context.beats_until_chord_change <= beats_to_target + 0.15)
+        if rhythm_changes_here:
+            next_chord = context.rhythmic_next_chord
+            source = "chart-pattern"
         if (context.confirmed_variation_chord != "--" and
                 (bar == context.bar or
                  (context.tracking_state in ("UNCERTAIN", "LOST") and
@@ -386,7 +397,7 @@ class BassPlayer(VirtualInstrument):
                               velocity=velocity, beat=beat, bar=bar,
                               confidence=decision.confidence, reason=reason)
         execution_time = start_time
-        can_compensate = (follow_level == "HIGH" and source == "chart" and
+        can_compensate = (follow_level == "HIGH" and source in ("chart", "chart-pattern") and
                           context.chart_available and context.position_confidence >= 0.75)
         if can_compensate:
             compensation = max(0.0, context.total_estimated_latency) / 1000.0

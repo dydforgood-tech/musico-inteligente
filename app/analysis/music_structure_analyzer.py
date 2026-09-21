@@ -279,7 +279,8 @@ class MusicStructureAnalyzer:
             current_position=pos,
             current_pattern=self._active_pattern,
             pattern_memory=self._pattern_memory,
-            current_section_type=self._active_section.section_type if self._active_section else "UNKNOWN"
+            current_section_type=self._active_section.section_type if self._active_section else "UNKNOWN",
+            harmonic_rhythm=context
         )
         if pred is None:
             pred = MusicPrediction()

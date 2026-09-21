@@ -78,10 +78,12 @@ class PredictionEngine:
 
     def predict_next(self, current_position: MusicPosition,
                      current_pattern: Optional[MusicalPattern], pattern_memory: PatternMemory,
-                     current_section_type: str = "UNKNOWN", bars_ahead: int = 1) -> MusicPrediction:
+                     current_section_type: str = "UNKNOWN", bars_ahead: int = 1,
+                     harmonic_rhythm=None) -> MusicPrediction:
         """Consome a posição musical fornecida; não consulta relógios ou offsets."""
         self._latest_prediction = self._predict_next(
-            current_position, current_pattern, pattern_memory, current_section_type, bars_ahead)
+            current_position, current_pattern, pattern_memory, current_section_type, bars_ahead,
+            harmonic_rhythm)
         self._latest_prediction.source_bar = current_position.current_bar
         self._latest_prediction.source_beat = current_position.current_beat
         return self._latest_prediction
@@ -92,9 +94,32 @@ class PredictionEngine:
         current_pattern: Optional[MusicalPattern],
         pattern_memory: PatternMemory,
         current_section_type: str = "UNKNOWN",
-        bars_ahead: int = 1
+        bars_ahead: int = 1,
+        harmonic_rhythm=None,
     ) -> MusicPrediction:
         """Gera a predição da próxima seção, padrão e acordes vindouros."""
+        # Perfil observado em beats tem prioridade sobre a suposição antiga de
+        # um acorde por compasso, mas só após aprendizagem confiável da seção.
+        if harmonic_rhythm is not None:
+            expected = float(getattr(harmonic_rhythm, "expected_chord_duration_beats", 0.0))
+            remaining = float(getattr(harmonic_rhythm, "beats_until_change", 0.0) or
+                              getattr(harmonic_rhythm, "beats_until_chord_change", 0.0))
+            next_chord = str(getattr(harmonic_rhythm, "next_chord",
+                                     getattr(harmonic_rhythm, "rhythmic_next_chord", "--")))
+            confidence = min(float(getattr(harmonic_rhythm, "duration_confidence", 0.0)),
+                             float(getattr(harmonic_rhythm, "pattern_confidence", 0.0)))
+            pattern_id = str(getattr(harmonic_rhythm, "harmonic_rhythm_pattern", "--"))
+            if expected > 0.0 and next_chord != "--" and confidence >= 0.55:
+                return MusicPrediction(
+                    predicted_section=current_section_type,
+                    predicted_pattern=pattern_id,
+                    predicted_chords=[next_chord],
+                    bars_until_change=max(0, int(remaining // self._beats_per_bar)),
+                    beats_until_change=remaining,
+                    confidence=confidence,
+                    prediction_reason=(f"Ritmo harmônico aprendido: mudança após "
+                                       f"{expected:.2f} beats")
+                )
         if current_pattern is None:
             # Sem padrão ativo identificado
             return MusicPrediction(

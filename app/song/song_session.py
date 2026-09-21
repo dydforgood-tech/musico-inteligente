@@ -24,6 +24,7 @@ from app.music.prediction_engine import PredictionEngine, MusicPrediction
 from app.music.position_estimator import PositionEstimator, TrackingState, EstimatedPosition
 from app.analysis.tempo_detector import TempoResult
 from app.music.follow_confidence import calculate_follow_confidence
+from app.music.harmonic_rhythm import HarmonicRhythmTracker
 
 
 class PerformanceState(str, Enum):
@@ -94,6 +95,7 @@ class SongSession:
         # 5. Motores de Estrutura e Predição isolados
         self._structure_analyzer: MusicStructureAnalyzer = MusicStructureAnalyzer()
         self._prediction_engine: PredictionEngine = self._structure_analyzer.prediction_engine
+        self._harmonic_rhythm = HarmonicRhythmTracker(self._structure_analyzer.pattern_memory)
 
         # 6. Estimador Contínuo de Posição Musical (v0.4)
         self._position_estimator: PositionEstimator = PositionEstimator(
@@ -304,6 +306,7 @@ class SongSession:
         self._context.key = self._song.key
         self._fusion.reset()
         self._structure_analyzer.reset()
+        self._harmonic_rhythm.reset()
         self._position_estimator.reset()
         self._current_chart_pos = self._position_estimator.refresh_position()
         self._last_confident_chart_pos = self._current_chart_pos
@@ -349,6 +352,9 @@ class SongSession:
             timestamp, bpm=bpm_input,
             beat_timestamp=tempo_result.beat_timestamp if tempo_result else None,
             observation_confidence=tempo_result.confidence if tempo_result else 0.0)
+        self._harmonic_rhythm.observe(
+            self._clock.total_beats, self._current_chart_pos.section_name,
+            detected_chord, detected_confidence)
         activity = self._has_musical_activity(source_context, detected_chord,
                                                detected_confidence, tempo_result)
         should_localize = self._update_performance_state(
@@ -359,7 +365,8 @@ class SongSession:
                 timestamp=timestamp, detected_chord=detected_chord,
                 detected_confidence=detected_confidence, detected_key=detected_key,
                 detected_note=source_context.note if source_context is not None else "--",
-                note_confidence=source_context.note_confidence if source_context is not None else 0.0)
+                note_confidence=source_context.note_confidence if source_context is not None else 0.0,
+                harmonic_rhythm_events=self._harmonic_rhythm.timeline)
             if self._position_estimator.bar_offset != old_offset:
                 self._position_generation += 1
             if activity and self._current_chart_pos.confidence >= 0.50:
@@ -488,6 +495,15 @@ class SongSession:
         ctx.confirmed_variation_chord = (detected_chord if state.confirmed_variation
                                          and detected_confidence >= 0.85 else "--")
         ctx.chord_confidence = state.confidence
+        rhythm = self._harmonic_rhythm.state
+        ctx.current_chord_elapsed_beats = rhythm.current_elapsed_beats
+        ctx.expected_chord_duration_beats = rhythm.expected_chord_duration_beats
+        ctx.beats_until_chord_change = rhythm.beats_until_change
+        ctx.duration_confidence = rhythm.duration_confidence
+        ctx.pattern_confidence = rhythm.pattern_confidence
+        ctx.harmonic_rhythm_pattern = rhythm.pattern_id
+        ctx.harmonic_rhythm_observations = rhythm.observation_count
+        ctx.rhythmic_next_chord = rhythm.next_chord
         if previous != ctx.chord or timestamp < previous_time:
             ctx.previous_chord = previous
             ctx.chord_start_time = timestamp
@@ -613,6 +629,27 @@ class SongSession:
                 f"TARGET BPM: {d['target_bpm']:.1f} | TEMPO CONF: {d['tempo_confidence']:.2f} | "
                 f"BEAT PHASE: {d['beat_phase']:.2f} | PHASE ERROR: {d['phase_error_ms']:+.0f} ms | "
                 f"STATE: {d['tracking_state']}")
+
+    def format_harmonic_rhythm_diagnostics(self) -> str:
+        """Snapshot para depurar cifra, detector estabilizado e duração em beats."""
+        ctx = self._context
+        return (f"SECTION: {ctx.current_section} | CURRENT: {ctx.chord} | "
+                f"ELAPSED: {ctx.current_chord_elapsed_beats:.2f} beats | "
+                f"EXPECTED DURATION: {ctx.expected_chord_duration_beats:.2f} beats | "
+                f"BEATS UNTIL CHANGE: {ctx.beats_until_chord_change:.2f} | "
+                f"NEXT: {ctx.next_expected_chord} | DETECTED: {ctx.smoothed_detected_chord} | "
+                f"CHORD CONF: {ctx.chord_confidence:.2f} | DURATION CONF: {ctx.duration_confidence:.2f} | "
+                f"POSITION CONF: {ctx.position_confidence:.2f} | PATTERN: {ctx.harmonic_rhythm_pattern} | "
+                f"OBSERVATIONS: {ctx.harmonic_rhythm_observations}")
+
+    def get_harmonic_rhythm_timeline(self) -> List[Dict[str, Any]]:
+        """Log consultável de eventos fechados; não é uma segunda posição musical."""
+        return [{
+            "start_beat": round(event.start_beat, 2), "section": event.section_key,
+            "detected": event.symbol, "raw_duration_beats": round(event.raw_duration_beats, 2),
+            "duration_beats": event.quantized_duration_beats,
+            "confidence": round(event.confidence, 2),
+        } for event in self._harmonic_rhythm.timeline]
 
     # ============================================================
     # Navegação Manual (Ensaio / Rehearsal Mode)

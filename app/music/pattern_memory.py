@@ -15,6 +15,7 @@ from app.music.harmonic_normalization import (
     sequence_similarity,
     normalize_chord_sequence
 )
+from app.music.harmonic_rhythm import HarmonicRhythmPattern
 
 
 class PatternMemory:
@@ -34,6 +35,8 @@ class PatternMemory:
 
         # Tabela de transições entre seções: {(from_sec, to_sec): SectionTransition}
         self._section_transitions: Dict[Tuple[str, str], SectionTransition] = {}
+        self._harmonic_rhythms: Dict[str, HarmonicRhythmPattern] = {}
+        self._harmonic_rhythm_counter: int = 0
 
     def reset(self) -> None:
         """Limpa toda a memória de padrões e transições para uma nova análise."""
@@ -43,6 +46,47 @@ class PatternMemory:
         self._pattern_transition_counts.clear()
         self._pattern_transition_durations.clear()
         self._section_transitions.clear()
+        self._harmonic_rhythms.clear()
+        self._harmonic_rhythm_counter = 0
+
+    def register_harmonic_rhythm(self, section_key: str, chord_sequence: List[str],
+                                 duration_sequence: List[float], confidence: float) -> HarmonicRhythmPattern:
+        """Aprende uma seção inteira e rejeita um outlier isolado por média robusta."""
+        key = f"{section_key}|{'|'.join(chord_sequence)}"
+        pattern = self._harmonic_rhythms.get(key)
+        if pattern is None:
+            self._harmonic_rhythm_counter += 1
+            pattern = HarmonicRhythmPattern(
+                id=f"{section_key}_RHYTHM_{self._harmonic_rhythm_counter:02d}",
+                section_key=section_key, chord_sequence=list(chord_sequence),
+                duration_sequence=list(duration_sequence), confidence=max(0.0, min(1.0, confidence)),
+                variance=[0.0] * len(duration_sequence))
+            self._harmonic_rhythms[key] = pattern
+            return pattern
+        if len(pattern.duration_sequence) == len(duration_sequence):
+            for i, observed in enumerate(duration_sequence):
+                prior = pattern.duration_sequence[i]
+                deviation = abs(observed - prior)
+                # Um desvio grande precisa reaparecer: não ensina uma execução errada.
+                gain = 0.25 if deviation <= max(0.5, prior * .30) else 0.05
+                pattern.duration_sequence[i] = prior + (observed - prior) * gain
+                pattern.variance[i] = pattern.variance[i] * .75 + deviation * .25
+        pattern.observations += 1
+        pattern.confidence = min(.98, pattern.confidence * .80 + max(0.0, min(1.0, confidence)) * .20 + .04)
+        return pattern
+
+    def find_harmonic_rhythm(self, section_key: str, chord: str, chord_index: int = 0) -> Optional[HarmonicRhythmPattern]:
+        candidates = [pattern for pattern in self._harmonic_rhythms.values()
+                      if pattern.section_key == section_key and pattern.chord_sequence]
+        exact = [pattern for pattern in candidates
+                 if chord_index < len(pattern.chord_sequence) and pattern.chord_sequence[chord_index] == chord]
+        if exact:
+            return max(exact, key=lambda pattern: (pattern.observations, pattern.confidence))
+        matching = [pattern for pattern in candidates if pattern.chord_sequence[0] == chord]
+        return max(matching, key=lambda pattern: (pattern.observations, pattern.confidence)) if matching else None
+
+    def get_harmonic_rhythm_patterns(self) -> List[HarmonicRhythmPattern]:
+        return list(self._harmonic_rhythms.values())
 
     def get_all_patterns(self) -> List[MusicalPattern]:
         """Retorna todos os padrões harmônicos atualmente aprendidos."""

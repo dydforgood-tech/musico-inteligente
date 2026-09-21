@@ -291,6 +291,8 @@ class AudioAnalyzer:
                 chroma_vector=chroma,
                 lat_metrics=lat_metrics
             )
+            ctx.raw_detected_chord = chord_res.symbol
+            ctx.smoothed_detected_chord = ctx.chord
             # Atividade independente de reconhecer nota ou acorde: evita confundir silêncio com áudio incerto.
             ctx.audio_activity = float(np.sqrt(np.mean(np.square(np.asarray(audio_chunk, dtype=np.float64)))))
 

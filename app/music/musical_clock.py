@@ -84,6 +84,11 @@ class MusicalClock:
         return self._beat_position
 
     @property
+    def total_beats(self) -> float:
+        """Coordenada musical contínua usada para duração harmônica, nunca em segundos."""
+        return self._total_beats
+
+    @property
     def tempo_confidence(self) -> float:
         return self._tempo_confidence
 
