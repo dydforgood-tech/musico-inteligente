@@ -7,6 +7,8 @@ from app.instruments.bass_model import BassPatternType
 from app.instruments.bass_player import BassPlayer
 from app.instruments.registry import VirtualPlayerRegistry
 from app.music.musical_context import MusicalContext
+from app.music.harmonic_rhythm import HarmonicRhythmEvent
+from app.music.position_estimator import TrackingState
 from app.song.song import Song
 from app.song.song_session import SongSession
 
@@ -89,15 +91,16 @@ class TestPredictiveBass(unittest.TestCase):
         self.assertTrue(all(ev.generation_id == session.context.position_generation for ev in events))
         self.assertNotIn(old, events)
 
-    def test_tracking_loss_keeps_chart_prediction(self):
+    def test_tracking_loss_is_silent_until_position_is_confirmed(self):
         bass, registry = self.registry()
         ctx = MusicalContext(timestamp=1.75, chord="C", next_expected_chord="Am",
                              next_change_bar=2, bar=1, beat=4, beat_position=.5,
                              bpm=120, tempo_tracking_state="HOLDOVER",
-                             tracking_state="LOST", position_confidence=.4)
-        event = registry.dispatch_context(ctx)["bass"]
-        self.assertTrue(event.note.startswith("A"))
-        self.assertAlmostEqual(bass.synthesizer.scheduled_events[0].confidence, .4)
+                             tracking_state="LOST", position_confidence=.95,
+                             confidence=.95, follow_confidence_level="HIGH")
+        events = registry.dispatch_context(ctx)
+        self.assertNotIn("bass", events)
+        self.assertEqual(bass.synthesizer.scheduled_events, [])
 
     def test_confirmed_variation_adapts_future_decision_without_single_hit_switch(self):
         bass, registry = self.registry()
@@ -128,6 +131,13 @@ class TestPredictiveBass(unittest.TestCase):
         session.update_audio_tick(38.0, detected_chord="C", detected_confidence=.9)
         registry.dispatch_context(session.context)
         old_generation = session.context.position_generation
+        session.position_estimator._tracking_state = TrackingState.LOST
+        session.position_estimator._startup_lock = False
+        for event_index, symbol in enumerate(("C", "Dm", "Bb", "E7")):
+            rhythm_event = HarmonicRhythmEvent(
+                symbol, event_index * 4.0, 4.0, 4.0, .95, "TEST")
+            session.position_estimator._recent_harmonic_rhythm.append(
+                ((rhythm_event.symbol, rhythm_event.start_beat), rhythm_event))
         for index, chord in enumerate(("Dm", "Bb", "E7")):
             session.update_audio_tick(38.1 + index * .05,
                                       detected_chord=chord, detected_confidence=.9)

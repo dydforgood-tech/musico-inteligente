@@ -26,12 +26,13 @@ class TestAudioLocalization(unittest.TestCase):
             pos = est.update(timestamp=t, detected_chord=ch, detected_confidence=0.9)
         return pos
 
-    def test_locates_musician_at_refrao(self):
-        """Tocando a progressão do Refrão, o sistema localiza o Refrão (não fica na Intro)."""
+    def test_startup_lock_does_not_jump_to_refrao(self):
+        """No início, uma progressão parecida não possui autoridade para pular a Intro."""
         clock = MusicalClock(bpm=120.0, meter="4/4")
         est = PositionEstimator(self.alignment, clock)
         pos = self._feed(est, clock, ["F", "C", "G", "Am"])
-        self.assertEqual(pos.section_name, "Refrao")
+        self.assertNotEqual(pos.section_name, "Refrao")
+        self.assertEqual(est.position_stability_metrics["global_relocations"], 0)
 
     def test_single_chord_does_not_jump(self):
         """Um único acorde divergente NÃO faz o sistema saltar pela música."""
@@ -53,12 +54,13 @@ class TestAudioLocalization(unittest.TestCase):
         self.assertGreaterEqual(score, 0.75)
         self.assertGreaterEqual(length, 2)
 
-    def test_locates_by_tonic_when_quality_wrong(self):
-        """O detector erra a qualidade (Fm/C7/Am7), mas a TÔNICA localiza o Refrão."""
+    def test_tonic_sequence_does_not_bypass_startup_lock(self):
+        """Tônicas compatíveis não podem pular a primeira seção durante startup."""
         clock = MusicalClock(bpm=120.0, meter="4/4")
         est = PositionEstimator(self.alignment, clock)
         pos = self._feed(est, clock, ["Fm", "C7", "G", "Am7"])
-        self.assertEqual(pos.section_name, "Refrao")
+        self.assertNotEqual(pos.section_name, "Refrao")
+        self.assertEqual(est.position_stability_metrics["global_relocations"], 0)
 
     def test_root_only_confirms_position(self):
         """Um acorde com tônica certa e qualidade errada confirma (não gera divergência)."""

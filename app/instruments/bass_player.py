@@ -226,8 +226,7 @@ class BassPlayer(VirtualInstrument):
         if performance_state in ("HOLDING", "WAITING", "ENDED"):
             self._synthesizer.cancel_scheduled()
             return None
-        if (getattr(context, "tracking_state", "TRACKING") == "LOST" and
-                getattr(context, "follow_confidence_level", "MEDIUM") == "LOW"):
+        if getattr(context, "tracking_state", "TRACKING") in ("LOST", "RECOVERING"):
             self._synthesizer.cancel_scheduled()
             return None
         if context.tempo_tracking_state != "UNINITIALIZED":

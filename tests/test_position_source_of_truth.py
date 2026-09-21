@@ -12,8 +12,9 @@ from app.instruments.bass_model import BassPatternType
 from app.instruments.bass_player import BassPlayer
 from app.instruments.registry import VirtualPlayerRegistry
 from app.music.chart_alignment import ChartPosition
+from app.music.harmonic_rhythm import HarmonicRhythmEvent
 from app.music.musical_context import MusicalContext
-from app.music.position_estimator import ProgressionMatch
+from app.music.position_estimator import ProgressionMatch, TrackingState
 from app.project.project_manager import ProjectManager
 from app.song.song import Song
 from app.song.song_session import SongSession
@@ -45,9 +46,19 @@ class TestPositionSourceOfTruth(unittest.TestCase):
         self.assertEqual(session.prediction.source_bar, musical_bar)
         self.assertEqual(session.prediction.source_beat, session.current_beat)
 
+    def confirm_recovery_progression(self, session, chords):
+        for index, chord in enumerate(chords):
+            event = HarmonicRhythmEvent(chord, index * 4.0, 4.0, 4.0, .95, "TEST")
+            session.position_estimator._recent_harmonic_rhythm.append(
+                ((event.symbol, event.start_beat), event))
+
     def anchor_forward(self, session):
         session.update_audio_tick(38.0, detected_chord="C", detected_confidence=0.9)
         self.assert_consistent(session, 20, 20)
+        # Relocalização global só tem autoridade durante recuperação explícita.
+        session.position_estimator._tracking_state = TrackingState.LOST
+        session.position_estimator._startup_lock = False
+        self.confirm_recovery_progression(session, ("C", "Dm", "Bb", "E7"))
         for i, chord in enumerate(["Dm", "Bb", "E7"]):
             session.update_audio_tick(38.1 + i * 0.05, detected_chord=chord, detected_confidence=0.9)
         self.assert_consistent(session, 20, 36)
@@ -70,6 +81,9 @@ class TestPositionSourceOfTruth(unittest.TestCase):
     def test_audio_reanchors_backward(self):
         session = self.session()
         session.update_audio_tick(94.0, detected_chord="C", detected_confidence=0.9)
+        session.position_estimator._tracking_state = TrackingState.LOST
+        session.position_estimator._startup_lock = False
+        self.confirm_recovery_progression(session, ("C", "Am", "F", "G"))
         for i, chord in enumerate(["Am", "F", "G"]):
             session.update_audio_tick(94.1 + i * 0.05, detected_chord=chord, detected_confidence=0.9)
         self.assert_consistent(session, 48, 32)
@@ -89,9 +103,14 @@ class TestPositionSourceOfTruth(unittest.TestCase):
 
     def test_sustained_chord_does_not_replay_old_localization(self):
         session = self.anchor_forward(self.session())
+        transition_count = len(session.position_estimator.position_transition_log)
+        global_count = session.position_estimator.position_stability_metrics["global_relocations"]
         session.update_audio_tick(40.0, detected_chord="E7", detected_confidence=0.9)
-        self.assertEqual(session.current_bar, 37)
-        self.assertEqual(session.position_estimator.bar_offset, -16)
+        self.assertEqual(session.current_bar, 36)
+        self.assertEqual(len(session.position_estimator.position_transition_log), transition_count)
+        self.assertEqual(
+            session.position_estimator.position_stability_metrics["global_relocations"],
+            global_count)
 
     def test_local_recovery_persists_offset_next_tick(self):
         session = self.anchor_forward(self.session())

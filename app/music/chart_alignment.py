@@ -151,11 +151,6 @@ class ChartAlignment:
             if lm.line_type == "LYRIC" and lm.start_bar <= bar <= lm.end_bar:
                 return lm.line_number
 
-        # 3. Em seguida, seções ou outras linhas mapeadas
-        for lm in self._chart.line_map:
-            if lm.start_bar <= bar <= lm.end_bar:
-                return lm.line_number
-
         # Se passou do último, retorna a última linha relevante
         content_lines = [lm for lm in self._chart.line_map if lm.line_type in ("CHORD", "LYRIC")]
         if content_lines:

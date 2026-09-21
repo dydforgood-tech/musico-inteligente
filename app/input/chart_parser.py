@@ -166,8 +166,8 @@ class ChartParser:
                     line_number=line_num,
                     line_type="EMPTY",
                     text=line_str,
-                    start_bar=current_bar,
-                    end_bar=current_bar
+                    start_bar=0,
+                    end_bar=0
                 ))
                 i += 1
                 continue
@@ -191,8 +191,8 @@ class ChartParser:
                     line_number=line_num,
                     line_type="METADATA",
                     text=line_str,
-                    start_bar=current_bar,
-                    end_bar=current_bar
+                    start_bar=0,
+                    end_bar=0
                 ))
                 i += 1
                 continue
@@ -208,8 +208,8 @@ class ChartParser:
                     text=line_str,
                     section_id=sec.id,
                     section_name=sec.name,
-                    start_bar=current_bar,
-                    end_bar=current_bar
+                    start_bar=0,
+                    end_bar=0
                 ))
                 i += 1
                 continue
@@ -229,8 +229,8 @@ class ChartParser:
                     text=line_str,
                     section_id=sec.id,
                     section_name=sec.name,
-                    start_bar=current_bar,
-                    end_bar=current_bar
+                    start_bar=0,
+                    end_bar=0
                 ))
                 i += 1
                 continue
@@ -246,8 +246,8 @@ class ChartParser:
                     text=line_str,
                     section_id=sec.id,
                     section_name=sec.name,
-                    start_bar=current_bar,
-                    end_bar=current_bar
+                    start_bar=0,
+                    end_bar=0
                 ))
                 i += 1
                 continue
@@ -263,8 +263,8 @@ class ChartParser:
                     text=line_str,
                     section_id=sec.id,
                     section_name=sec.name,
-                    start_bar=current_bar,
-                    end_bar=current_bar
+                    start_bar=0,
+                    end_bar=0
                 ))
                 i += 1
                 continue
@@ -365,6 +365,18 @@ class ChartParser:
 
             # 7. Linha de Letra Avulsa (sem acordes na linha superior)
             if classified.line_type == SemanticLineType.LYRIC:
+                # Texto livre antes da primeira estrutura musical é cabeçalho
+                # visual (título/artista), não letra com duração na timeline.
+                if current_section is None:
+                    line_map.append(ChartLineInfo(
+                        line_number=line_num,
+                        line_type="HEADER",
+                        text=line_str,
+                        start_bar=0,
+                        end_bar=0
+                    ))
+                    i += 1
+                    continue
                 sec = current_section if current_section is not None else ensure_section("Verso", "VERSE", line_num)
                 sec.lyrics.append(LyricSegment(
                     text=classified.cleaned_text,

@@ -633,6 +633,7 @@ class SongSession:
             "expected_duration_beats": self._context.expected_chord_duration_beats,
             "last_position_change_reason": self._position_estimator.last_position_change_reason,
             "search_mode": self._position_estimator.last_search_mode,
+            "note_evidence": self._position_estimator.last_note_evidence,
             "expected_chord": self.expected_chord, "detected_chord": self.detected_chord,
             "performance_state": self.performance_state,
         }

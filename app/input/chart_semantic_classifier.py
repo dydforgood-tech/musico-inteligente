@@ -26,6 +26,7 @@ class SemanticLineType(str, Enum):
     ANNOTATION = "ANNOTATION"
     REPEAT = "REPEAT"
     NUMBER = "NUMBER"
+    HEADER = "HEADER"
     EMPTY = "EMPTY"
 
 

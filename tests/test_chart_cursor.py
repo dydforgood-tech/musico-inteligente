@@ -5,6 +5,7 @@ import unittest
 from app.input.chart_parser import ChartParser
 from app.music.chart_alignment import ChartAlignment
 from app.music.musical_clock import MusicalClock
+from app.music.harmonic_rhythm import HarmonicRhythmEvent
 from app.music.position_estimator import PositionEstimator, TrackingState
 
 
@@ -57,7 +58,7 @@ class TestChartCursor(unittest.TestCase):
         self.tick(estimator, clock, 8.0, "C", .9)
         self.assertEqual(estimator.chart_cursor_index, 4)
         for offset, chord in enumerate(("C", "Am", "F", "G")):
-            pos = self.tick(estimator, clock, 8.1 + offset * .05, chord, .9)
+            pos = self.tick(estimator, clock, 8.1 + offset * 2.0, chord, .9)
         self.assertEqual(pos.section_name, "Verso")
         self.assertEqual(pos.event_index, 7)
         self.assertTrue(set(range(4)).issubset(estimator.consumed_chart_events))
@@ -93,6 +94,11 @@ Em C G D
         self.tick(estimator, clock, 16.0, "Em", .9)
         self.assertEqual(estimator._cursor_position(1, 16).section_name, "Refrão")
         estimator._tracking_state = TrackingState.LOST
+        for event_index, symbol in enumerate(("Dm", "G", "C", "F")):
+            event = HarmonicRhythmEvent(
+                symbol, event_index * 4.0, 4.0, 4.0, .95, "TEST")
+            estimator._recent_harmonic_rhythm.append(
+                ((event.symbol, event.start_beat), event))
         for offset, chord in enumerate(("Dm", "G", "C", "F")):
             pos = self.tick(estimator, clock, 16.1 + offset * .05, chord, .95)
         self.assertEqual(pos.section_name, "Verso")

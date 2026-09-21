@@ -14,19 +14,20 @@ class TestNoteFollowing(unittest.TestCase):
         source = MusicalContext(note=note, note_confidence=confidence)
         session.update_audio_tick(timestamp, source_context=source)
 
-    def test_three_notes_reanchor_and_advance(self):
+    def test_three_notes_are_auxiliary_and_do_not_reanchor(self):
         session = self.session()
         self.hear(session, "D4", 0.1)
         self.hear(session, "F4", 0.3)
         self.assertEqual(session.current_bar, 1)
         self.hear(session, "A4", 0.5)
         self.assertEqual(session.clock_bar, 1)
-        self.assertEqual(session.current_bar, 5)
-        self.assertEqual(session.chart_position.current_bar, 5)
-        self.assertEqual(session.context.bar, 5)
-        self.assertEqual(session.prediction.source_bar, 5)
+        self.assertEqual(session.current_bar, 1)
+        self.assertEqual(session.chart_position.current_bar, 1)
+        self.assertEqual(session.context.bar, 1)
+        self.assertEqual(session.prediction.source_bar, 1)
+        self.assertEqual(session.position_estimator.last_note_evidence["action"], "CONFIDENCE_ONLY")
         session.update_audio_tick(2.0)
-        self.assertEqual(session.current_bar, 6)
+        self.assertEqual(session.current_bar, 2)
 
     def test_low_confidence_and_repeated_frames_do_not_count_as_three_notes(self):
         session = self.session()
@@ -56,7 +57,8 @@ class TestNoteFollowing(unittest.TestCase):
         session.position_estimator.set_capo(2)
         for note, t in [("E4", 0.1), ("G4", 0.3), ("B4", 0.5)]:
             self.hear(session, note, t)
-        self.assertEqual(session.current_bar, 5)
+        self.assertEqual(session.current_bar, 1)
+        self.assertEqual(session.position_estimator.last_note_evidence["action"], "CONFIDENCE_ONLY")
 
     def test_old_notes_expire_before_new_phrase(self):
         session = self.session()
