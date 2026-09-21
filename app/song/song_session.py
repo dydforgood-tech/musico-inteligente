@@ -607,6 +607,10 @@ class SongSession:
             "next_event_state": self.chart_position.next_event_state,
             "section_state": self.chart_position.section_state,
             "next_event": self.chart_position.next_chord,
+            "event_elapsed_beats": self._position_estimator.current_event_elapsed_beats,
+            "expected_duration_beats": self._context.expected_chord_duration_beats,
+            "last_position_change_reason": self._position_estimator.last_position_change_reason,
+            "search_mode": self._position_estimator.last_search_mode,
             "expected_chord": self.expected_chord, "detected_chord": self.detected_chord,
             "performance_state": self.performance_state,
         }
@@ -621,10 +625,18 @@ class SongSession:
             f"({data['next_event_state']}) | "
             f"SECTION EVENT: {data['section_event_index']} / occurrence {data['section_occurrence']} "
             f"({data['section_state']}) | NEXT: {data['next_event']} | "
+            f"EVENT ELAPSED: {data['event_elapsed_beats']:.2f} beats | "
+            f"EXPECTED DURATION: {data['expected_duration_beats']:.2f} beats | "
+            f"SEARCH MODE: {data['search_mode']} | "
             f"TRACKING: {data['tracking_state']} | BAR OFFSET: {data['bar_offset']:+d} | "
             f"EXPECTED: {data['expected_chord']} | DETECTED: {data['detected_chord']}"
-            f" | PERFORMANCE: {data['performance_state']}"
+            f" | PERFORMANCE: {data['performance_state']} | "
+            f"LAST POSITION CHANGE: {data['last_position_change_reason']}"
         )
+
+    def get_position_transition_log(self) -> List[Dict[str, Any]]:
+        """Log de mudanças reais do cursor; beats, por si só, não entram aqui."""
+        return self._position_estimator.position_transition_log
 
     def get_tempo_diagnostics(self) -> Dict[str, Any]:
         return {
