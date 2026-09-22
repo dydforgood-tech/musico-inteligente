@@ -65,7 +65,59 @@ class TestNoteFollowing(unittest.TestCase):
         self.hear(session, "D4", 0.1)
         self.hear(session, "F4", 0.3)
         self.hear(session, "A4", 4.0)
-        self.assertEqual(session.current_bar, 3)
+        self.assertEqual(session.current_bar, 1)
+
+    def test_live_notes_follow_adjacent_chords_across_intro(self):
+        session = self.session("[Intro]\nG D\n[Verse]\nEm C")
+        for note, time in (("G4", .10), ("B4", .25), ("D4", .40)):
+            self.hear(session, note, time)
+        self.assertEqual(session.chart_position.current_chord, "G")
+        self.assertTrue(session.position_estimator.start_anchor_confirmed)
+        for note, time in (("D4", .55), ("F#4", .72), ("A4", .90)):
+            self.hear(session, note, time)
+        self.assertEqual(session.chart_position.current_chord, "D")
+        self.assertEqual(session.position_estimator.last_note_evidence["action"], "ADVANCED_LOCAL")
+        for note, time in (("E4", 1.05), ("G4", 1.22), ("B4", 1.40)):
+            self.hear(session, note, time)
+        self.assertEqual(session.chart_position.section_name, "Verse")
+        self.assertEqual(session.chart_position.current_chord, "Em")
+
+    def test_clock_does_not_change_chord_with_live_unknown_audio(self):
+        session = self.session("[Intro]\nG D\n[Verse]\nEm C")
+        for time in (0.0, 1.0, 2.0, 3.0):
+            self.hear(session, "G4", time)
+        self.assertEqual(session.chart_position.current_chord, "G")
+        self.assertEqual(session.position_estimator.chart_cursor_index, 0)
+
+    def test_single_distinctive_note_does_not_advance(self):
+        session = self.session("[Intro]\nG D\n[Verse]\nEm C")
+        self.hear(session, "G4", .1)
+        self.hear(session, "B4", .3)
+        self.hear(session, "D4", .5)
+        self.hear(session, "F#4", .7)
+        self.assertEqual(session.position_estimator.chart_cursor_index, 0)
+
+    def test_local_notes_use_sounding_chord_with_capo(self):
+        session = self.session("[Intro]\nG D\n[Verse]\nEm C")
+        session.position_estimator.set_capo(2)
+        for note, time in (("A4", .1), ("C#5", .3), ("E5", .5),
+                           ("E4", .7), ("G#4", .9), ("B4", 1.1)):
+            self.hear(session, note, time)
+        self.assertEqual(session.chart_position.current_chord, "D")
+
+    def test_relative_chord_changes_when_new_root_starts_complete_triad(self):
+        session = self.session("[Intro]\nC\n[Verse]\nAm")
+        for note, time in (("C4", .1), ("E4", .3), ("G4", .5),
+                           ("A4", .7), ("C5", .9), ("E5", 1.1)):
+            self.hear(session, note, time)
+        self.assertEqual(session.chart_position.current_chord, "Am")
+
+    def test_passing_root_at_end_of_phrase_does_not_change_chord(self):
+        session = self.session("[Intro]\nC\n[Verse]\nAm")
+        for note, time in (("C4", .1), ("E4", .3), ("G4", .5),
+                           ("C5", .7), ("E5", .9), ("A4", 1.1)):
+            self.hear(session, note, time)
+        self.assertEqual(session.chart_position.current_chord, "C")
 
 
 if __name__ == "__main__":

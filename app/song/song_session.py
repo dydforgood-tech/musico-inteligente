@@ -314,7 +314,7 @@ class SongSession:
         self._context.reset()
         self._context.bpm = self._clock.bpm
         self._context.meter = self._clock.meter
-        self._context.key = self._song.key
+        self._context.key = self._song.performance_settings.key_override or self._chart.key
         self._fusion.reset()
         self._structure_analyzer.reset()
         self._harmonic_rhythm.reset()
@@ -406,7 +406,8 @@ class SongSession:
                 harmonic_rhythm_events=self._harmonic_rhythm.timeline,
                 current_chord_elapsed_beats=self._harmonic_rhythm.state.current_elapsed_beats,
                 expected_chord_duration_beats=self._harmonic_rhythm.state.expected_chord_duration_beats,
-                duration_confidence=self._harmonic_rhythm.state.duration_confidence)
+                duration_confidence=self._harmonic_rhythm.state.duration_confidence,
+                audio_observable=source_context is not None)
             if self._position_estimator.bar_offset != old_offset:
                 self._position_generation += 1
             if activity and self._current_chart_pos.confidence >= 0.50:
@@ -560,7 +561,17 @@ class SongSession:
         ctx.section_progress = position.section_progress
         ctx.structure_confidence = position.confidence
         ctx.predicted_next_section = state.next_section
-        if detected_key and detected_key != "--":
+        chart_key = self._song.performance_settings.key_override or self._chart.key
+        if self._alignment.event_count and chart_key not in ("", "--"):
+            ctx.key = chart_key
+            ctx.key_confidence = 1.0
+            ctx.previous_key = "--"
+            ctx.key_start_time = 0.0
+            ctx.key_duration = max(0.0, timestamp)
+            ctx.key_candidate = "--"
+            ctx.candidate_confidence = 0.0
+            ctx.candidate_duration = 0.0
+        elif detected_key and detected_key != "--":
             ctx.key = detected_key
         if update_structure:
             # Históricos DSP permanecem no AudioAnalyzer; estrutura aprende do contexto efetivo.
@@ -847,7 +858,7 @@ class SongSession:
         self._clock.set_meter(self._song.performance_settings.meter_override or parsed.meter)
         self._context.bpm = self._clock.bpm
         self._context.meter = self._clock.meter
-        self._context.key = parsed.key
+        self._context.key = self._song.performance_settings.key_override or parsed.key
         self._alignment = ChartAlignment(self._chart)
         self._position_estimator.set_alignment(self._alignment)
         self._position_estimator.set_capo(self._chart.capo_semitones)

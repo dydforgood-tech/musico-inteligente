@@ -454,7 +454,9 @@ class MainWindow:
         # -------------------------------------------------------------
         card_key = tk.Frame(dash_frame, bg="#181d26", bd=1, relief="solid", padx=8, pady=6)
         card_key.grid(row=0, column=2, sticky="nsew", padx=3, pady=3)
-        tk.Label(card_key, text="TONALIDADE ESTIMADA", bg="#181d26", fg="#00d2ff", font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        self.lbl_key_source = tk.Label(card_key, text="TONALIDADE ESTIMADA", bg="#181d26",
+                                       fg="#00d2ff", font=("Segoe UI", 8, "bold"))
+        self.lbl_key_source.pack(anchor="w")
         self.lbl_val_key = tk.Label(card_key, text="--", bg="#181d26", fg="#5a6677", font=("Segoe UI", 20, "bold"))
         self.lbl_val_key.pack(pady=1)
         self.lbl_key_duration = tk.Label(card_key, text="Tempo no tom: 0.0 s", bg="#181d26", fg="#00e676", font=("Segoe UI", 8, "bold"))
@@ -1249,12 +1251,19 @@ class MainWindow:
                         fg="#00e676" if prior_on else "#8c9ba5")
 
                     # 3. Tonalidade Estimada & Tempo no Tom
+                    chart_key_active = bool(self.project_manager.active_session and
+                                            self.project_manager.active_session.alignment.event_count)
+                    self.lbl_key_source.config(text=("TOM DA CIFRA / SELETOR" if chart_key_active
+                                                     else "TONALIDADE ESTIMADA"))
                     if ctx.key != "--":
                         self.lbl_val_key.config(text=ctx.key, fg="#00e676")
                         self.lbl_key_duration.config(text=f"Tempo no tom: {ctx.key_duration:.1f} s", fg="#00e676")
-                        prev_key_txt = f"Anterior: {ctx.previous_key}  |  Conf: {int(ctx.key_confidence * 100)}%"
+                        prev_key_txt = ("Tom informado para esta música" if chart_key_active else
+                                        f"Anterior: {ctx.previous_key}  |  Conf: {int(ctx.key_confidence * 100)}%")
                         self.lbl_prev_key.config(text=prev_key_txt, fg="#ffffff")
-                        if ctx.key_candidate != "--" and ctx.key_candidate != ctx.key:
+                        if chart_key_active:
+                            self.lbl_key_status.config(text="Cifra / seletor", fg="#00e676")
+                        elif ctx.key_candidate != "--" and ctx.key_candidate != ctx.key:
                             cand_txt = f"Candidata: {ctx.key_candidate} ({int(ctx.candidate_confidence * 100)}%)"
                             self.lbl_key_status.config(text=cand_txt, fg="#ffb703")
                         else:

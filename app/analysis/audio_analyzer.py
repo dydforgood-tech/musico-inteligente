@@ -31,6 +31,7 @@ from app.analysis.key_detector import KeyDetector, KeyResult, KrumhanslSchmuckle
 from app.analysis.key_history import KeyHistory, KeyEvent
 from app.analysis.tempo_detector import OnsetTempoDetector, TempoResult
 from app.music.musical_context import MusicalContext
+from app.music.chord_chart import parse_chord
 from app.music.musical_clock import MusicalClock
 from app.music.context_manager import MusicalContextManager
 from app.music.music_structure import MusicStructure
@@ -191,16 +192,30 @@ class AudioAnalyzer:
 
     def _harmonic_prior_for(self, session=None):
         """Libera o prior da cifra apenas quando a posição está estável."""
-        if self._expected_chord is None:
-            return None, False
         active = session if session is not None else self._active_session
+        event_count = getattr(getattr(active, "alignment", None), "event_count", 0)
+        chart_active = isinstance(event_count, int) and event_count > 0
+        expected = active.expected_chord if chart_active else self._expected_chord
+        if expected is None or expected == "--":
+            return None, False
         if active is None:
-            return self._expected_chord, True
+            return expected, True
         state = getattr(active, "tracking_state", "TRACKING")
         state = getattr(state, "value", state)
         confidence = float(getattr(active, "position_confidence", 0.0))
-        enabled = state == "TRACKING" and confidence >= 0.70
-        return (self._expected_chord if enabled else None), enabled
+        if state != "TRACKING" or confidence < 0.70:
+            return None, False
+        ctx = active.context if chart_active else None
+        competing_candidate = False
+        if ctx is not None:
+            candidate_root = getattr(ctx, "chord_candidate_root", "--")
+            expected_root = parse_chord(expected).root
+            competing_candidate = (candidate_root not in ("", "--", expected_root) and
+                                   getattr(ctx, "chord_candidate_frames", 0) >= 3 and
+                                   getattr(ctx, "chord_candidate_confidence", 0.0) >= 0.55)
+        enabled = (not getattr(ctx, "stable_chord_stale", False) and
+                   not competing_candidate)
+        return (expected if enabled else None), enabled
 
     def set_pitch_detector(self, algorithm_name: str) -> None:
         """Altera o detector de pitch em tempo de execução."""
@@ -265,13 +280,18 @@ class AudioAnalyzer:
             # 2. Extração de Cromagrama (12 Classes de Notas)
             chroma: np.ndarray = self._chroma_extractor.extract(audio_chunk, sample_rate)
 
+            # Em acompanhamento com cifra, o tom escrito/selecionado é a fonte
+            # autoritativa. A estimativa estatística permanece no modo livre.
+            chart_key = (session.song.performance_settings.key_override or session.chart.key
+                         if session is not None and session.alignment.event_count else None)
+
             # 2b. No modo de alta resolução, a detecção de TOM continua usando o cromagrama
             #     FFT clássico (calibração validada do Krumhansl-Schmuckler); apenas a
             #     detecção de ACORDE usa o cromagrama harmônico.
-            if self._chroma_extractor.method == "harmonic":
-                key_chroma = self._fft_chroma.extract(audio_chunk, sample_rate)
-            else:
-                key_chroma = chroma
+            key_chroma = None
+            if chart_key is None:
+                key_chroma = (self._fft_chroma.extract(audio_chunk, sample_rate)
+                              if self._chroma_extractor.method == "harmonic" else chroma)
 
             # 3. Análise Harmônica & Detecção de Acordes (com Inversões)
             #    Usa a expectativa da cifra (se definida) como prior musical da detecção.
@@ -283,11 +303,12 @@ class AudioAnalyzer:
                 chroma_vector=chroma,
                 timestamp=timestamp,
                 expected_chord=expected_for_frame,
-                key=self._key_hint
+                key=chart_key or self._key_hint
             )
 
             # 4. Estimativa de Tonalidade (Krumhansl-Schmuckler Dual-Timeframe)
-            key_res: KeyResult = self._key_detector.estimate_key(key_chroma, timestamp=timestamp)
+            key_res: Optional[KeyResult] = (self._key_detector.estimate_key(key_chroma, timestamp=timestamp)
+                                            if key_chroma is not None else None)
 
             # 5. Rastreamento de Andamento & Batida
             self._tempo_detector.observe_chunk(audio_chunk, sample_rate, timestamp)
@@ -308,7 +329,8 @@ class AudioAnalyzer:
                 lat_metrics=lat_metrics,
                 audio_activity=audio_activity,
             )
-            ctx.expected_chart_chord = self._expected_chord or "--"
+            ctx.expected_chart_chord = (session.expected_chord if chart_key is not None
+                                        else self._expected_chord) or "--"
             ctx.chart_prior_enabled = chart_prior_enabled
 
             # Localiza primeiro; estrutura, predição e instrumentos só recebem a posição final.

@@ -247,11 +247,11 @@ class TestPositionSourceOfTruth(unittest.TestCase):
         self.assertIs(ctx, session.context)
         self.assertIs(analyzer.context, ctx)
         self.assertIs(analyzer.structure_analyzer, session.structure_analyzer)
-        self.assertEqual(ctx.bar, 37)
+        self.assertEqual(ctx.bar, 36)
         self.assertEqual(ctx.clock_bar, 21)
-        self.assertEqual(analyzer.bass_player.current_event.bar, 37)
+        self.assertEqual(analyzer.bass_player.current_event.bar, 36)
         self.assertEqual(analyzer.context_manager.context.bar, 21)
-        self.assertEqual(session.prediction.source_bar, 37)
+        self.assertEqual(session.prediction.source_bar, 36)
         self.assertEqual(len(analyzer.bass_player.get_recent_events()), 1)
 
     def test_follow_scroll_uses_official_line_even_if_chord_is_on_neighbor(self):
