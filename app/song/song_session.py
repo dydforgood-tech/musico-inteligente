@@ -69,10 +69,12 @@ class SongSession:
         )
 
         # 3. Cifra estruturada (parseada da canção)
-        if song.chart_data:
-            self._chart: ChordChart = ChordChart.from_dict(song.chart_data)
-        elif song.chart_text:
-            self._chart = ChartParser.parse(
+        if song.chart_text:
+            # O editor e o destaque usam linhas físicas do texto. Dados
+            # estruturados antigos podem conter índices defasados após
+            # transposição/importação; reconstruí-los do texto evita iniciar
+            # numa linha diferente daquela exibida.
+            self._chart: ChordChart = ChartParser.parse(
                 text=song.chart_text,
                 default_key=song.key,
                 default_bpm=song.bpm,
@@ -80,6 +82,8 @@ class SongSession:
                 title=song.title,
                 artist=song.artist
             )
+        elif song.chart_data:
+            self._chart = ChordChart.from_dict(song.chart_data)
         else:
             self._chart = ChordChart(
                 title=song.title,

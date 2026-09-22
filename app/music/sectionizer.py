@@ -69,8 +69,10 @@ def _classifier():
 def text_has_section_headers(text: str) -> bool:
     """Indica se a cifra já traz cabeçalhos de seção (ex.: [Refrão]) — então não mexemos."""
     Classifier, SemLineType = _classifier()
+    from app.input.chart_parser import ChartParser
     for line in text.split('\n'):
-        if Classifier.classify_line(line).line_type == SemLineType.SECTION:
+        if (Classifier.classify_line(line).line_type == SemLineType.SECTION or
+                ChartParser.parse_section_header(line)):
             return True
     return False
 

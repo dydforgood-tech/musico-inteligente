@@ -386,6 +386,9 @@ class PositionEstimator:
                                  recovery_confirmation or
                                  (not self._startup_lock and detected_confidence >= 0.85 and
                                   (duration_ready or elapsed >= 0.75)))
+                    if (self._startup_lock and not self._start_anchor_confirmed and
+                            self._clock.total_beats < 2.0):
+                        confirmed = False
                     if confirmed:
                         self._set_chart_cursor(index, "confirmed expected next chord", absolute_beat)
                         self._global_recovery_confirmation_pending = False
@@ -968,7 +971,7 @@ class PositionEstimator:
                       next_mean - current_mean >= 0.25)
         if (not (clear_next or root_led_triad) or
                 (self._startup_lock and not self._start_anchor_confirmed and
-                 self._clock.total_beats < 1.0)):
+                 self._clock.total_beats < 2.0)):
             return
         previous = self._chart_cursor_index
         self._set_chart_cursor(next_index, "confirmed local note sequence",

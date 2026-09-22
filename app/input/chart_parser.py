@@ -64,30 +64,39 @@ class ChartParser:
 
     @classmethod
     def parse_section_header(cls, line: str) -> Optional[Tuple[str, str]]:
-        """Identifica se a linha declara uma seção (ex: '[Intro]', '[Verso 1]')."""
-        return ChartSemanticClassifier.parse_section_line(line)
+        """Identifica seções isoladas ou com acordes na mesma linha."""
+        section = ChartSemanticClassifier.parse_section_line(line)
+        if section:
+            return section
+        match = re.match(r'^\s*(\[[^\]]+\])\s+(.+)$', line)
+        if not match:
+            return None
+        section = ChartSemanticClassifier.parse_section_line(match.group(1))
+        if (section and not ChartSemanticClassifier.parse_annotation_line(match.group(1)) and
+                cls.is_chord_line(match.group(2))):
+            return section
+        return None
 
     @staticmethod
-    def _split_inline_headers(lines: List[str]) -> List[str]:
+    def _split_inline_headers(lines: List[str], with_line_numbers: bool = False):
         """Separa cabeçalhos de seção que trazem acordes na MESMA linha (padrão CifraClub).
 
         Ex.: "[Intro]  G#  C  Fm  C#9"  ->  "[Intro]"  +  "G#  C  Fm  C#9".
         Só divide quando o rótulo é uma seção real (não uma anotação) e há conteúdo após ']'.
         """
         out: List[str] = []
+        source_lines: List[int] = []
         pat = re.compile(r'^(\s*\[[^\]]+\])\s+(\S.*)$')
-        for line in lines:
+        for physical_line, line in enumerate(lines, 1):
             m = pat.match(line)
-            if m:
+            if m and ChartParser.parse_section_header(line):
                 header, rest = m.group(1), m.group(2)
-                sec = ChartSemanticClassifier.parse_section_line(header.strip())
-                ann = ChartSemanticClassifier.parse_annotation_line(header.strip())
-                if sec and not ann:
-                    out.append(header)
-                    out.append(rest)
-                    continue
+                out.extend((header, rest))
+                source_lines.extend((physical_line, physical_line))
+                continue
             out.append(line)
-        return out
+            source_lines.append(physical_line)
+        return (out, source_lines) if with_line_numbers else out
 
     @classmethod
     def parse(
@@ -100,7 +109,8 @@ class ChartParser:
         artist: str = "Artista Desconhecido"
     ) -> ChordChart:
         """Processa o texto completo da cifra e constrói o objeto ChordChart com resolução por linha."""
-        lines = cls._split_inline_headers(text.splitlines())
+        lines, source_lines = cls._split_inline_headers(
+            text.splitlines(), with_line_numbers=True)
         sections: List[ChartSection] = []
         current_section: Optional[ChartSection] = None
         current_bar = 1
@@ -157,7 +167,7 @@ class ChartParser:
         i = 0
         while i < len(lines):
             line_str = lines[i]
-            line_num = i + 1  # 1-indexado
+            line_num = source_lines[i]  # linha física no texto exibido
             classified = ChartSemanticClassifier.classify_line(line_str, line_number=line_num)
 
             # 1. Linha Vazia
@@ -290,7 +300,7 @@ class ChartParser:
                 # Verifica se a próxima linha é uma linha de letra casada
                 has_next_lyric = False
                 lyric_line_str = ""
-                next_line_num = line_num + 1
+                next_line_num = source_lines[i + 1] if i + 1 < len(lines) else line_num + 1
 
                 if (i + 1) < len(lines):
                     next_classified = ChartSemanticClassifier.classify_line(lines[i + 1], line_number=next_line_num)

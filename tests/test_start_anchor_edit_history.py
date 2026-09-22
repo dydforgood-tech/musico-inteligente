@@ -10,6 +10,7 @@ from app.input.chart_parser import ChartParser
 from app.music.chart_alignment import ChartAlignment
 from app.music.chord_chart import ChordChart
 from app.music.musical_clock import MusicalClock
+from app.music.sectionizer import text_has_section_headers
 from app.music.position_estimator import PositionEstimator, TrackingState
 from app.song.song import Song
 from app.song.song_session import SongSession
@@ -33,6 +34,41 @@ G C D
 
 
 class TestStartAnchor(unittest.TestCase):
+    def test_inline_intro_uses_physical_first_line_and_first_chord(self):
+        text = "Título\nTom: G\n\n[Intro] G D\n    Em C\n\n[Verse]\nAm F\n"
+        chart = ChartParser.parse(text)
+        self.assertEqual(chart.sections[0].name, "Intro")
+        self.assertEqual(chart.sections[0].chords[0].line_number, 4)
+        self.assertEqual(chart.sections[0].chords[2].line_number, 5)
+        session = SongSession(Song(chart_text=text))
+        self.assertEqual(session.start_anchor.line_index, 4)
+        self.assertEqual(session.chart_position.current_chord, "G")
+        self.assertEqual(session.chart_position.line_index, 4)
+        self.assertTrue(text_has_section_headers(text))
+        self.assertIsNone(ChartParser.parse_section_header("[Ritmo Padrão] 165 bpm"))
+
+    def test_text_repairs_stale_stored_intro_coordinates_on_load(self):
+        text = "Título\nTom: G\n\n[Intro] G D\n    Em C\n\n[Verse]\nAm F\n"
+        stale = ChartParser.parse("[Verse]\nC\n[Intro]\nG D\nEm C").to_dict()
+        song = Song(chart_text=text, chart_data=stale)
+        session = SongSession(song)
+        self.assertEqual(session.start_anchor.section_name, "Intro")
+        self.assertEqual(session.start_anchor.line_index, 4)
+        session.start()
+        self.assertEqual(session.chart_position.event_index, 0)
+        self.assertEqual(session.chart_position.line_index, 4)
+
+    def test_wrong_next_chord_frames_cannot_skip_first_intro_line_at_start(self):
+        from app.music.musical_context import MusicalContext
+        session = SongSession(Song(chart_text="[Intro] G D\nEm C\n[Verse]\nAm F"))
+        for timestamp in (0.0, .12, .25, .38, .51):
+            session.update_audio_tick(timestamp, detected_chord="D",
+                                      detected_confidence=.95,
+                                      source_context=MusicalContext(audio_activity=.2))
+        self.assertEqual(session.chart_position.event_index, 0)
+        self.assertEqual(session.chart_position.line_index, 1)
+        self.assertEqual(session.chart_position.current_chord, "G")
+
     def test_first_playable_event_ignores_preamble_and_uses_intro(self):
         alignment = ChartAlignment(ChartParser.parse(INTRO_CHART))
         anchor = alignment.start_anchor
@@ -189,6 +225,28 @@ class TestIntroEditorIntegration(unittest.TestCase):
             saved = json.load(stream)
         saved_song = saved["setlists"][0]["songs"][0]
         self.assertNotIn("[Intro]", saved_song["chart_text"])
+
+    def test_inline_intro_is_editable_block_and_play_starts_on_its_line(self):
+        text = "Título\nTom: G\n\n[Intro] G D\n    Em C\n\n[Verse]\nAm F\n"
+        self.app.project_manager.update_song_chart(self.song.id, text)
+        self.app._render_chart_text(self.song)
+        preamble, ranges = self.app._block_line_ranges(text)
+        self.assertEqual(preamble, 3)
+        self.assertEqual(ranges[0], (4, 6, "INTRO"))
+        session = self.app.project_manager.active_session
+        session.start()
+        self.app._highlight_chart_position(session.chart_position)
+        self.assertEqual(str(self.app.text_chart_view.tag_ranges("active_chord")[0]).split(".")[0], "4")
+
+        self.app._selected_block_index = 0
+        self.app._on_copy_block()
+        self.assertEqual(len(self.song.chart_data["sections"]), 3)
+        self.assertEqual([s["section_type"] for s in self.song.chart_data["sections"][:2]],
+                         ["INTRO", "INTRO"])
+        self.app._selected_block_index = 0
+        self.app._on_delete_block()
+        self.assertEqual(self.app.project_manager.active_session.start_anchor.section_name, "Intro")
+        self.assertEqual(len(self.song.chart_data["sections"]), 2)
 
 
 if __name__ == "__main__":
