@@ -393,9 +393,20 @@ class SongSession:
                 "harmonic_eligible": detected_chord not in ("", "--", "UNKNOWN", "N"),
                 "action": "ACCEPTED" if detected_chord not in ("", "--", "UNKNOWN", "N") else "IGNORED",
             }
+        observed_onset = None
+        if (source_context is not None and
+                source_context.smoothed_detected_chord == detected_chord and
+                detected_chord not in ("", "--", "UNKNOWN", "N") and
+                0.0 <= timestamp - source_context.chord_start_time <= 1.5):
+            observed_onset = max(0.0, self._clock.total_beats -
+                                 (timestamp - source_context.chord_start_time) *
+                                 self._clock.bpm / 60.0)
         self._harmonic_rhythm.observe(
             self._clock.total_beats, self._current_chart_pos.section_name,
-            detected_chord, detected_confidence)
+            detected_chord, detected_confidence,
+            active_notes=source_context.active_notes if source_context is not None else None,
+            observation_available=source_context is not None,
+            transition_beat=observed_onset)
         activity = self._has_musical_activity(source_context, detected_chord,
                                                detected_confidence, tempo_result)
         should_localize = self._update_performance_state(
@@ -405,8 +416,9 @@ class SongSession:
             self._current_chart_pos = self._position_estimator.update(
                 timestamp=timestamp, detected_chord=detected_chord,
                 detected_confidence=detected_confidence, detected_key=detected_key,
-                detected_note=source_context.note if source_context is not None else "--",
-                note_confidence=source_context.note_confidence if source_context is not None else 0.0,
+                # f0 monofônico é diagnóstico: somente acordes/eventos
+                # polifônicos estabilizados podem deslocar a cifra.
+                detected_note="--", note_confidence=0.0,
                 harmonic_rhythm_events=self._harmonic_rhythm.timeline,
                 current_chord_elapsed_beats=self._harmonic_rhythm.state.current_elapsed_beats,
                 expected_chord_duration_beats=self._harmonic_rhythm.state.expected_chord_duration_beats,
@@ -542,6 +554,10 @@ class SongSession:
         ctx.chord_confidence = state.confidence
         rhythm = self._harmonic_rhythm.state
         ctx.current_chord_elapsed_beats = rhythm.current_elapsed_beats
+        ctx.harmonic_event_chord = rhythm.current_chord
+        ctx.harmonic_event_root = rhythm.current_root
+        ctx.harmonic_event_start_beat = rhythm.current_start_beat
+        ctx.harmonic_event_confidence = rhythm.event_confidence
         ctx.expected_chord_duration_beats = rhythm.expected_chord_duration_beats
         ctx.beats_until_chord_change = rhythm.beats_until_change
         ctx.duration_confidence = rhythm.duration_confidence

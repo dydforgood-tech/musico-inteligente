@@ -24,6 +24,7 @@ import numpy as np
 
 from app.analysis.pitch_detector import PitchDetector, PitchResult, create_pitch_detector, AVAILABLE_PITCH_DETECTORS
 from app.analysis.chroma_extractor import ChromaExtractor
+from app.analysis.active_notes import ActiveNoteTracker
 from app.analysis.harmonic_analyzer import HarmonicAnalyzer, DefaultHarmonicAnalyzer
 from app.analysis.chord_detector import Chord
 from app.analysis.chord_history import ChordHistory, ChordEvent
@@ -55,6 +56,7 @@ class AudioAnalyzer:
         # Módulos especializados de processamento DSP / MIR
         self._pitch_detector: PitchDetector = create_pitch_detector(pitch_algorithm)
         self._chroma_extractor: ChromaExtractor = ChromaExtractor(method=chroma_method)
+        self._active_note_tracker = ActiveNoteTracker()
         # Extrator FFT dedicado à detecção de TOM (usado quando o de acorde é harmônico)
         self._fft_chroma: ChromaExtractor = ChromaExtractor(method="fft")
         self._harmonic_analyzer: HarmonicAnalyzer = DefaultHarmonicAnalyzer(detect_extensions=detect_extensions)
@@ -177,6 +179,7 @@ class AudioAnalyzer:
         """
         with self._lock:
             self._chroma_extractor = ChromaExtractor(method="harmonic" if enabled else "fft")
+            self._active_note_tracker.reset()
             if hasattr(self._harmonic_analyzer, "set_detect_extensions"):
                 self._harmonic_analyzer.set_detect_extensions(enabled)
 
@@ -247,8 +250,9 @@ class AudioAnalyzer:
         with self._lock:
             self._active_session = None
             self._tempo_detector.reset()
+            self._active_note_tracker.reset()
             self._key_detector.reset()
-            self._harmonic_analyzer.chord_history.clear()
+            self._harmonic_analyzer.reset()
             self._context_manager.reset()
             self._structure_analyzer.reset()
             self._band.reset_all()
@@ -278,12 +282,16 @@ class AudioAnalyzer:
                 np.square(np.asarray(audio_chunk, dtype=np.float64)))))
 
             # 2. Extração de Cromagrama (12 Classes de Notas)
-            chroma: np.ndarray = self._chroma_extractor.extract(audio_chunk, sample_rate)
+            raw_chroma: np.ndarray = self._chroma_extractor.extract(audio_chunk, sample_rate)
 
             # Em acompanhamento com cifra, o tom escrito/selecionado é a fonte
             # autoritativa. A estimativa estatística permanece no modo livre.
             chart_key = (session.song.performance_settings.key_override or session.chart.key
                          if session is not None and session.alignment.event_count else None)
+            key_hint = chart_key or self._key_hint
+            active_state = self._active_note_tracker.update(
+                raw_chroma, timestamp, key=key_hint or "--", audio_activity=audio_activity)
+            chroma = active_state.chroma
 
             # 2b. No modo de alta resolução, a detecção de TOM continua usando o cromagrama
             #     FFT clássico (calibração validada do Krumhansl-Schmuckler); apenas a
@@ -291,7 +299,7 @@ class AudioAnalyzer:
             key_chroma = None
             if chart_key is None:
                 key_chroma = (self._fft_chroma.extract(audio_chunk, sample_rate)
-                              if self._chroma_extractor.method == "harmonic" else chroma)
+                              if self._chroma_extractor.method == "harmonic" else raw_chroma)
 
             # 3. Análise Harmônica & Detecção de Acordes (com Inversões)
             #    Usa a expectativa da cifra (se definida) como prior musical da detecção.
@@ -303,7 +311,7 @@ class AudioAnalyzer:
                 chroma_vector=chroma,
                 timestamp=timestamp,
                 expected_chord=expected_for_frame,
-                key=chart_key or self._key_hint
+                key=key_hint
             )
 
             # 4. Estimativa de Tonalidade (Krumhansl-Schmuckler Dual-Timeframe)
@@ -326,6 +334,8 @@ class AudioAnalyzer:
                 key_res=key_res,
                 tempo_res=tempo_res,
                 chroma_vector=chroma,
+                raw_chroma_vector=raw_chroma,
+                active_notes=active_state.notes,
                 lat_metrics=lat_metrics,
                 audio_activity=audio_activity,
             )

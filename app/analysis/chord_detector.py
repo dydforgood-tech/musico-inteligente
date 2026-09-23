@@ -72,11 +72,17 @@ class ChordDetector:
     def __init__(self, detect_extensions: bool = False):
         self._templates = self._build_templates()
         self._smoothed_chroma = np.zeros(12, dtype=np.float32)
+        self._last_timestamp: Optional[float] = None
         self._alpha = 0.45  # Suavização temporal (EMA): menor = mais responsivo (menos atraso)
         # Quando habilitado, refina a tríade detectada em acordes de tétrade/suspensos
         # (7, 7M, m7, sus4, sus2) analisando a energia das notas de tensão no cromagrama.
         # Mantido desligado por padrão para preservar a detecção base de tríades pura.
         self._detect_extensions = detect_extensions
+
+    def reset(self) -> None:
+        """Limpa memória de frames sem alterar o modo de análise configurado."""
+        self._smoothed_chroma.fill(0.0)
+        self._last_timestamp = None
 
     def _build_templates(self) -> Dict[str, Tuple[np.ndarray, str, str, List[str]]]:
         """Constrói perfis harmônicos de referência para as 12 tonalidades."""
@@ -120,7 +126,14 @@ class ChordDetector:
         continua baseada na similaridade de cosseno bruta, não no escore enviesado.
         """
         if len(chroma) < 12 or np.max(chroma) < 0.05:
+            self._smoothed_chroma.fill(0.0)
+            self._last_timestamp = timestamp
             return Chord(timestamp=timestamp)
+
+        if (self._last_timestamp is not None and
+                (timestamp < self._last_timestamp or timestamp - self._last_timestamp > 0.8)):
+            self._smoothed_chroma.fill(0.0)
+        self._last_timestamp = timestamp
 
         # Suavização temporal do cromagrama
         self._smoothed_chroma = (self._alpha * self._smoothed_chroma) + ((1.0 - self._alpha) * chroma)
@@ -130,6 +143,12 @@ class ChordDetector:
             return Chord(timestamp=timestamp)
 
         c_unit = self._smoothed_chroma / norm_c
+        relative = self._smoothed_chroma / max(1e-9, float(np.max(self._smoothed_chroma)))
+        # Uma única classe forte é pitch, não uma tríade. Esperar outras notas
+        # (simultâneas ou reunidas de um arpejo) evita que o template complete
+        # por conta própria os intervalos que o áudio não sustentou.
+        if int(np.count_nonzero(relative >= 0.22)) < 2:
+            return Chord(timestamp=timestamp)
 
         # Prior musical (opcional): coerência com a cifra esperada e/ou o tom.
         exp_pc = note_to_pc(expected_chord) if expected_chord else -1

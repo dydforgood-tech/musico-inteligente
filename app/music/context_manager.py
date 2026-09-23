@@ -8,7 +8,7 @@ Atua como ponte orquestradora entre os detectores brutos de DSP/MIR e o estado m
   5. Atualiza o MusicalContext thread-safe pronto para consumo pela UI e futuros músicos virtuais.
 """
 
-from typing import Optional, List
+from typing import Optional, List, Dict
 import numpy as np
 
 from app.music.musical_context import MusicalContext
@@ -89,6 +89,8 @@ class MusicalContextManager:
         key_res: Optional[KeyResult] = None,
         tempo_res: Optional[TempoResult] = None,
         chroma_vector: Optional[np.ndarray] = None,
+        raw_chroma_vector: Optional[np.ndarray] = None,
+        active_notes: Optional[Dict[str, float]] = None,
         lat_metrics: Optional[LatencyMetrics] = None,
         audio_activity: float = 0.0,
     ) -> MusicalContext:
@@ -112,8 +114,16 @@ class MusicalContextManager:
             ctx.note_confidence = 0.0
             ctx.cents_deviation = 0.0
 
+        ctx.raw_note = pitch_res.full_note if pitch_res and pitch_res.is_voiced else "--"
+        ctx.raw_pitch_hz = pitch_res.frequency_hz if pitch_res and pitch_res.is_voiced else 0.0
+        ctx.pitch_confidence = pitch_res.confidence if pitch_res else 0.0
+
         if chroma_vector is not None:
             ctx.chroma_vector = chroma_vector.tolist() if isinstance(chroma_vector, np.ndarray) else list(chroma_vector)
+        ctx.raw_chroma_vector = (raw_chroma_vector.tolist()
+                                 if isinstance(raw_chroma_vector, np.ndarray)
+                                 else list(raw_chroma_vector) if raw_chroma_vector is not None else [0.0] * 12)
+        ctx.active_notes = dict(active_notes or {})
 
         # 2. Estabilização e Histórico de Acordes
         if chord_res is not None:

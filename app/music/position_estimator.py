@@ -112,6 +112,9 @@ class PositionEstimator:
         self._transposition = TranspositionTracker()
         # Capotraste CONHECIDO (semitons): o áudio soa este tanto acima dos shapes escritos
         self._capo_semitones: int = 0
+        self._capo_domain = "WRITTEN"
+        self._capo_domain_candidate = "--"
+        self._capo_domain_observations = 0
 
         # LOCALIZAÇÃO POR ÁUDIO: o áudio decide ONDE na cifra o músico está.
         # O relógio dá o avanço suave; este deslocamento (offset) mapeia o compasso do
@@ -157,6 +160,9 @@ class PositionEstimator:
         self._recent_notes.clear()
         self._recent_harmonic_rhythm.clear()
         self._transposition.reset()
+        self._capo_domain = "UNRESOLVED" if self._capo_semitones else "WRITTEN"
+        self._capo_domain_candidate = "--"
+        self._capo_domain_observations = 0
         self._bar_offset = self._clock.bar - start.current_bar
         anchor = self._alignment.start_anchor
         self._chart_cursor_index = anchor.event_index if anchor else 0
@@ -403,15 +409,26 @@ class PositionEstimator:
             self._global_recovery_confirmation_pending = False
         return False
 
-    def _consume_closed_rhythm_events(self, events) -> bool:
-        """Um evento harmônico fechado confirma o acorde ativo e libera o próximo."""
+    def _consume_closed_rhythm_events(self, events, successor_chord: str = "--",
+                                      successor_confidence: float = 0.0,
+                                      require_successor: bool = False) -> bool:
+        """Consome evento fechado somente se o novo acorde confirmar o sucessor."""
         advanced = False
         for event in events or ():
             marker = (event.symbol, round(event.start_beat, 3))
             if marker in self._seen_rhythm_markers:
                 continue
             self._seen_rhythm_markers.add(marker)
-            if self._event_matches(self._chart_cursor_index, event.symbol):
+            if getattr(event, "end_reason", "CHANGE") != "CHANGE":
+                continue
+            next_index = self._chart_cursor_index + 1
+            successor_confirmed = (not require_successor or
+                                   (self._capo_domain != "UNRESOLVED" and
+                                    successor_confidence >= 0.35 and
+                                    next_index < self._alignment.event_count and
+                                    self._event_matches(next_index, successor_chord)))
+            if (self._event_matches(self._chart_cursor_index, event.symbol) and
+                    successor_confirmed):
                 self._set_chart_cursor(self._chart_cursor_index + 1,
                                        "confirmed harmonic transition", event.start_beat + event.raw_duration_beats)
                 advanced = True
@@ -511,13 +528,43 @@ class PositionEstimator:
     def set_capo(self, semitones: int) -> None:
         """Informa o capotraste (semitons) para comparar o áudio soante com os shapes escritos."""
         self._capo_semitones = max(0, int(semitones))
+        self._capo_domain = "UNRESOLVED" if self._capo_semitones else "WRITTEN"
+        self._capo_domain_candidate = "--"
+        self._capo_domain_observations = 0
+
+    def _resolve_capo_domain(self, detected_chord: str, confidence: float) -> None:
+        """Decide se os símbolos da cifra já estão no tom soante anunciado."""
+        if (self._capo_domain != "UNRESOLVED" or confidence < 0.65 or
+                detected_chord in ("", "--", "UNKNOWN", "N") or
+                self._alignment.event_count == 0):
+            return
+        written = self._alignment.get_position_for_event(self._chart_cursor_index).current_chord
+        sounding = self._transpose_for_capo(written)
+        detected = parse_chord(detected_chord)
+        raw_match = self._roots_equal(parse_chord(written), detected)
+        transposed_match = self._roots_equal(parse_chord(sounding), detected)
+        candidate = ("WRITTEN" if raw_match and not transposed_match else
+                     "SOUNDING" if transposed_match and not raw_match else "--")
+        if candidate == "--":
+            return
+        if candidate == self._capo_domain_candidate:
+            self._capo_domain_observations += 1
+        else:
+            self._capo_domain_candidate = candidate
+            self._capo_domain_observations = 1
+        if self._capo_domain_observations >= 2:
+            self._capo_domain = candidate
+
+    def _transpose_for_capo(self, chord: str) -> str:
+        from app.music.transposition import transpose_chord_symbol
+        return transpose_chord_symbol(chord, self._capo_semitones)
 
     def _expected_as_sounding(self, expected_chord: str) -> str:
         """Converte o acorde escrito (shape) para o som real, aplicando o capotraste."""
-        if self._capo_semitones == 0 or not expected_chord or expected_chord == "--":
+        if (self._capo_semitones == 0 or self._capo_domain == "WRITTEN" or
+                not expected_chord or expected_chord == "--"):
             return expected_chord
-        from app.music.transposition import transpose_chord_symbol
-        return transpose_chord_symbol(expected_chord, self._capo_semitones)
+        return self._transpose_for_capo(expected_chord)
 
     def update(
         self,
@@ -565,11 +612,14 @@ class PositionEstimator:
         # iguais no documento inteiro a cada frame.
         temporal_pos = self._alignment.get_position_at(
             max(1, clock_bar - self._bar_offset), current_beat, timestamp)
-        self._consume_closed_rhythm_events(harmonic_rhythm_events)
+        self._resolve_capo_domain(detected_chord, detected_confidence)
+        transition_consumed = self._consume_closed_rhythm_events(
+            harmonic_rhythm_events, detected_chord, detected_confidence,
+            require_successor=audio_observable)
         # Com uma fonte de áudio ativa, o relógio não confirma sozinho uma
         # mudança harmônica. O fallback temporal só serve para chamadas sem
-        # observações de áudio; acordes repetidos são a exceção indistinguível.
-        repeated_chart_chord = (confident_audio and
+        # observações de áudio. Mesmo acordes repetidos não são prova de troca.
+        repeated_chart_chord = (not audio_observable and confident_audio and
                                 self._chart_cursor_index + 1 < self._alignment.event_count and
                                 self._event_matches(self._chart_cursor_index, detected_chord) and
                                 self._event_matches(self._chart_cursor_index + 1, detected_chord))
@@ -588,7 +638,8 @@ class PositionEstimator:
         # O acorde já passou pelo estabilizador. Dois frames espaçados podem
         # confirmar o próximo evento; limitar isto a chord_changed contava só
         # o primeiro frame e deixava o cursor preso até o relógio avançar.
-        if confident_audio and self._follow_audio:
+        if (confident_audio and self._follow_audio and not transition_consumed and
+                self._capo_domain != "UNRESOLVED"):
             self._consume_from_audio(
                 detected_chord, detected_confidence,
                 expected_chord_duration_beats, duration_confidence,

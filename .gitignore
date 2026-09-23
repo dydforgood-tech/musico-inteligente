@@ -40,3 +40,4 @@ virtual_band_project*.json
 .env
 .env.*
 *.log
+analysis_reports/

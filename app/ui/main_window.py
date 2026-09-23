@@ -420,7 +420,7 @@ class MainWindow:
         # -------------------------------------------------------------
         card_pitch = tk.Frame(dash_frame, bg="#181d26", bd=1, relief="solid", padx=8, pady=6)
         card_pitch.grid(row=0, column=0, sticky="nsew", padx=3, pady=3)
-        tk.Label(card_pitch, text="NOTA ATUAL (PITCH)", bg="#181d26", fg="#00d2ff", font=("Segoe UI", 8, "bold")).pack(anchor="w")
+        tk.Label(card_pitch, text="PITCH BRUTO (MONOFÔNICO)", bg="#181d26", fg="#00d2ff", font=("Segoe UI", 8, "bold")).pack(anchor="w")
         self.lbl_val_note = tk.Label(card_pitch, text="--", bg="#181d26", fg="#5a6677", font=("Segoe UI", 24, "bold"))
         self.lbl_val_note.pack(pady=1)
         self.lbl_sub_note = tk.Label(card_pitch, text="0.0 Hz  |  Conf: 0%", bg="#181d26", fg="#8c9ba5", font=("Segoe UI", 8))
@@ -448,6 +448,9 @@ class MainWindow:
         self.lbl_chord_candidate.pack(anchor="w")
         self.lbl_chord_prior = tk.Label(card_chord, text="Cifra: -- | Prior: OFF", bg="#181d26", fg="#8c9ba5", font=("Segoe UI", 7))
         self.lbl_chord_prior.pack(anchor="w")
+        self.lbl_harmonic_event = tk.Label(card_chord, text="Evento harmônico: -- | 0.0 beats",
+                                            bg="#181d26", fg="#8c9ba5", font=("Segoe UI", 7))
+        self.lbl_harmonic_event.pack(anchor="w")
 
         # -------------------------------------------------------------
         # 3. TONALIDADE ESTIMADA (KEY) (Fase 11)
@@ -516,6 +519,9 @@ class MainWindow:
 
         self.chroma_view = ChromaView(left_bottom, height=45, bg_color="#141820", active_color="#00e676")
         self.chroma_view.pack(fill="both", expand=True, pady=2)
+        self.lbl_active_notes = tk.Label(left_bottom, text="Notas ativas: --", bg="#181d26",
+                                          fg="#00d2ff", font=("Consolas", 8), anchor="w")
+        self.lbl_active_notes.pack(fill="x")
 
         # Histórico resumido
         hist_box = tk.Frame(left_bottom, bg="#141820", padx=6, pady=3)
@@ -1249,6 +1255,11 @@ class MainWindow:
                     self.lbl_chord_prior.config(
                         text=f"Cifra: {expected}  |  Prior: {'ON' if prior_on else 'OFF'}  |  {tracking}",
                         fg="#00e676" if prior_on else "#8c9ba5")
+                    self.lbl_harmonic_event.config(
+                        text=(f"Evento: {ctx.harmonic_event_chord}  |  Raiz: "
+                              f"{ctx.harmonic_event_root}  |  "
+                              f"{ctx.current_chord_elapsed_beats:.1f} beats"),
+                        fg="#00e676" if ctx.harmonic_event_chord != "--" else "#8c9ba5")
 
                     # 3. Tonalidade Estimada & Tempo no Tom
                     chart_key_active = bool(self.project_manager.active_session and
@@ -1258,7 +1269,7 @@ class MainWindow:
                     if ctx.key != "--":
                         self.lbl_val_key.config(text=ctx.key, fg="#00e676")
                         self.lbl_key_duration.config(text=f"Tempo no tom: {ctx.key_duration:.1f} s", fg="#00e676")
-                        prev_key_txt = ("Tom informado para esta música" if chart_key_active else
+                        prev_key_txt = ("Tom informado para esta música | Conf: 100%" if chart_key_active else
                                         f"Anterior: {ctx.previous_key}  |  Conf: {int(ctx.key_confidence * 100)}%")
                         self.lbl_prev_key.config(text=prev_key_txt, fg="#ffffff")
                         if chart_key_active:
@@ -1302,6 +1313,10 @@ class MainWindow:
 
                     # 6. Cromagrama
                     self.chroma_view.update_chroma(ctx.chroma_vector)
+                    active = sorted(ctx.active_notes.items(), key=lambda item: -item[1])
+                    self.lbl_active_notes.config(
+                        text="Notas ativas: " + ("  ".join(
+                            f"{note} {score:.2f}" for note, score in active[:6]) if active else "--"))
 
                     # 7. Progressão Recente & Histórico de Tom
                     self.lbl_hist_progression.config(text=self.analyzer.chord_history.get_summary_text())

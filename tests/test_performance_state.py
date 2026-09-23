@@ -88,13 +88,15 @@ class TestPerformanceState(unittest.TestCase):
         session.update_audio_tick(6.2, source_context=self.source())
         self.assertEqual(session.performance_state, PerformanceState.WAITING.value)
         session.update_audio_tick(7.0, detected_chord="Dm", detected_confidence=.9,
-                                  source_context=self.source(.1, "D3", .9))
+                                  source_context=MusicalContext(audio_activity=.1,
+                                      smoothed_detected_chord="Dm", stable_chord_confidence=.9))
         self.assertEqual(session.performance_state, PerformanceState.RECOVERING.value)
         event = registry.dispatch_context(session.context)["bass"]
         self.assertEqual(event.beat, 1)
         self.assertGreater(event.start_time, session.context.timestamp)
         session.update_audio_tick(8.0, detected_chord="Dm", detected_confidence=.9,
-                                  source_context=self.source(.1, "D3", .9))
+                                  source_context=MusicalContext(audio_activity=.1,
+                                      smoothed_detected_chord="Dm", stable_chord_confidence=.9))
         self.assertEqual(session.performance_state, PerformanceState.PLAYING.value)
 
     def test_end_requires_silence_near_chart_end_and_keeps_session_for_restart(self):

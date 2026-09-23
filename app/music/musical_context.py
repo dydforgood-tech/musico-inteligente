@@ -29,7 +29,12 @@ class MusicalContext:
     current_frequency: float = 0.0              # Alias de compatibilidade
     note_confidence: float = 0.0                # Grau de certeza do pitch (0.0 a 1.0)
     cents_deviation: float = 0.0                # Desvio de afinação em cents (-50 a +50)
+    raw_pitch_hz: float = 0.0                   # f0 monofônico sem interpretação harmônica
+    raw_note: str = "--"
+    pitch_confidence: float = 0.0
     chroma_vector: List[float] = field(default_factory=lambda: [0.0] * 12)  # Energia das 12 classes C..B
+    raw_chroma_vector: List[float] = field(default_factory=lambda: [0.0] * 12)
+    active_notes: Dict[str, float] = field(default_factory=dict)
     audio_activity: float = 0.0                # RMS do bloco de referência, para estado de performance
 
     # ============================================================
@@ -65,6 +70,10 @@ class MusicalContext:
     chord_candidate_frames: int = 0
     current_chord_support_age_ms: float = 0.0
     stable_chord_stale: bool = False
+    harmonic_event_chord: str = "--"
+    harmonic_event_root: str = "--"
+    harmonic_event_start_beat: float = 0.0
+    harmonic_event_confidence: float = 0.0
     expected_chart_chord: str = "--"
     chart_prior_enabled: bool = False
 
@@ -198,7 +207,12 @@ class MusicalContext:
         self.current_frequency = 0.0
         self.note_confidence = 0.0
         self.cents_deviation = 0.0
+        self.raw_pitch_hz = 0.0
+        self.raw_note = "--"
+        self.pitch_confidence = 0.0
         self.chroma_vector = [0.0] * 12
+        self.raw_chroma_vector = [0.0] * 12
+        self.active_notes.clear()
         self.audio_activity = 0.0
 
         self.chord = "--"
@@ -231,6 +245,10 @@ class MusicalContext:
         self.chord_candidate_frames = 0
         self.current_chord_support_age_ms = 0.0
         self.stable_chord_stale = False
+        self.harmonic_event_chord = "--"
+        self.harmonic_event_root = "--"
+        self.harmonic_event_start_beat = 0.0
+        self.harmonic_event_confidence = 0.0
         self.expected_chart_chord = "--"
         self.chart_prior_enabled = False
 

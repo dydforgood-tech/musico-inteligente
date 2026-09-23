@@ -229,6 +229,11 @@ class BassPlayer(VirtualInstrument):
         if getattr(context, "tracking_state", "TRACKING") in ("LOST", "RECOVERING"):
             self._synthesizer.cancel_scheduled()
             return None
+        if (context.audio_activity >= 0.005 and
+                context.smoothed_detected_chord in ("", "--", "UNKNOWN", "N") and
+                context.position_confidence < 0.65):
+            self._synthesizer.cancel_scheduled()
+            return None
         if context.tempo_tracking_state != "UNINITIALIZED":
             return self._schedule_next_beat(context)
 
@@ -336,6 +341,10 @@ class BassPlayer(VirtualInstrument):
         key = (bar, beat)
         chart_changes_here = (bar > context.bar and context.next_expected_chord != "--" and
                               (context.next_change_bar == 0 or bar >= context.next_change_bar))
+        live_harmony_holds = (context.audio_activity >= 0.005 and
+                              context.harmonic_event_chord != context.next_expected_chord)
+        if live_harmony_holds:
+            chart_changes_here = False
         next_chord = context.next_expected_chord if chart_changes_here else context.chord
         source = "chart" if context.chart_available or context.next_expected_chord != "--" else "audio"
         beats_to_target = max(0.0, (start_time - context.timestamp) / beat_duration)
@@ -343,6 +352,9 @@ class BassPlayer(VirtualInstrument):
             context.rhythmic_next_chord != "--" and
             context.duration_confidence >= 0.55 and context.pattern_confidence >= 0.55 and
             context.beats_until_chord_change <= beats_to_target + 0.15)
+        if (context.audio_activity >= 0.005 and
+                context.harmonic_event_chord != context.rhythmic_next_chord):
+            rhythm_changes_here = False
         if rhythm_changes_here:
             next_chord = context.rhythmic_next_chord
             source = "chart-pattern"

@@ -25,7 +25,7 @@ class TestNoteFollowing(unittest.TestCase):
         self.assertEqual(session.chart_position.current_bar, 1)
         self.assertEqual(session.context.bar, 1)
         self.assertEqual(session.prediction.source_bar, 1)
-        self.assertEqual(session.position_estimator.last_note_evidence["action"], "CONFIDENCE_ONLY")
+        self.assertEqual(session.position_estimator.last_note_evidence, {})
         session.update_audio_tick(2.0)
         self.assertEqual(session.current_bar, 2)
 
@@ -58,7 +58,7 @@ class TestNoteFollowing(unittest.TestCase):
         for note, t in [("E4", 0.1), ("G4", 0.3), ("B4", 0.5)]:
             self.hear(session, note, t)
         self.assertEqual(session.current_bar, 1)
-        self.assertEqual(session.position_estimator.last_note_evidence["action"], "CONFIDENCE_ONLY")
+        self.assertEqual(session.position_estimator.last_note_evidence, {})
 
     def test_old_notes_expire_before_new_phrase(self):
         session = self.session()
@@ -67,20 +67,20 @@ class TestNoteFollowing(unittest.TestCase):
         self.hear(session, "A4", 4.0)
         self.assertEqual(session.current_bar, 1)
 
-    def test_live_notes_follow_adjacent_chords_across_intro(self):
+    def test_raw_pitch_does_not_move_chart_across_intro(self):
         session = self.session("[Intro]\nG D\n[Verse]\nEm C")
         for note, time in (("G4", .10), ("B4", .25), ("D4", .40)):
             self.hear(session, note, time)
         self.assertEqual(session.chart_position.current_chord, "G")
-        self.assertTrue(session.position_estimator.start_anchor_confirmed)
+        self.assertFalse(session.position_estimator.start_anchor_confirmed)
         for note, time in (("D4", .55), ("F#4", .72), ("A4", .90)):
             self.hear(session, note, time)
-        self.assertEqual(session.chart_position.current_chord, "D")
-        self.assertEqual(session.position_estimator.last_note_evidence["action"], "ADVANCED_LOCAL")
+        self.assertEqual(session.chart_position.current_chord, "G")
+        self.assertEqual(session.position_estimator.last_note_evidence, {})
         for note, time in (("E4", 1.05), ("G4", 1.22), ("B4", 1.40)):
             self.hear(session, note, time)
-        self.assertEqual(session.chart_position.section_name, "Verse")
-        self.assertEqual(session.chart_position.current_chord, "Em")
+        self.assertEqual(session.chart_position.section_name, "Intro")
+        self.assertEqual(session.chart_position.current_chord, "G")
 
     def test_clock_does_not_change_chord_with_live_unknown_audio(self):
         session = self.session("[Intro]\nG D\n[Verse]\nEm C")
@@ -103,14 +103,14 @@ class TestNoteFollowing(unittest.TestCase):
         for note, time in (("A4", .1), ("C#5", .3), ("E5", .5),
                            ("E4", .7), ("G#4", .9), ("B4", 1.1)):
             self.hear(session, note, time)
-        self.assertEqual(session.chart_position.current_chord, "D")
+        self.assertEqual(session.chart_position.current_chord, "G")
 
     def test_relative_chord_changes_when_new_root_starts_complete_triad(self):
         session = self.session("[Intro]\nC\n[Verse]\nAm")
         for note, time in (("C4", .1), ("E4", .3), ("G4", .5),
                            ("A4", .7), ("C5", .9), ("E5", 1.1)):
             self.hear(session, note, time)
-        self.assertEqual(session.chart_position.current_chord, "Am")
+        self.assertEqual(session.chart_position.current_chord, "C")
 
     def test_passing_root_at_end_of_phrase_does_not_change_chord(self):
         session = self.session("[Intro]\nC\n[Verse]\nAm")

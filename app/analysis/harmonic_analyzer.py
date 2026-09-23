@@ -12,6 +12,10 @@ class HarmonicAnalyzer(ABC):
     """Interface abstrata para análise harmônica polifônica."""
 
     @abstractmethod
+    def reset(self) -> None:
+        pass
+
+    @abstractmethod
     def analyze_harmony(
         self,
         audio_chunk: np.ndarray,
@@ -44,6 +48,10 @@ class DefaultHarmonicAnalyzer(HarmonicAnalyzer):
     def set_detect_extensions(self, enabled: bool) -> None:
         """Liga/desliga o reconhecimento de tétrades/suspensos em tempo de execução."""
         self._chord_detector = ChordDetector(detect_extensions=enabled)
+
+    def reset(self) -> None:
+        self._chord_detector.reset()
+        self._chord_history.clear()
 
     @property
     def chord_history(self) -> ChordHistory:
