@@ -367,10 +367,16 @@ class SongSession:
             # Seek da fonte invalida o horário de qualquer evento preparado.
             self._position_generation += 1
         manual_bpm = self._song.performance_settings.bpm_override
-        initial_observation = self._clock.elapsed_time == 0.0 and self._clock.tempo_confidence == 0.0
-        bpm_input = (manual_bpm or
-                     (detected_bpm if detected_bpm > 0 and
-                      (tempo_result is None or initial_observation) else None))
+        # O BPM do contexto do analisador começa em 120 por padrão e não é
+        # uma medição do músico. A cifra mantém o andamento inicial até uma
+        # observação explícita/confiável do detector ou um override manual.
+        if manual_bpm:
+            bpm_input = manual_bpm
+        elif tempo_result is not None:
+            bpm_input = (tempo_result.bpm if tempo_result.bpm > 0 and
+                         tempo_result.confidence >= .65 else None)
+        else:
+            bpm_input = detected_bpm if detected_bpm > 0 else None
         self._clock.update(
             timestamp, bpm=bpm_input,
             beat_timestamp=tempo_result.beat_timestamp if tempo_result else None,

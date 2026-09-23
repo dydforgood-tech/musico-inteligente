@@ -110,6 +110,7 @@ class BassSynthesizer:
         self._sample_rate = sample_rate
         self._volume = volume
         self._enabled = True
+        self.strict_mono = False
         self._lock = threading.Lock()
         self._voices: List[ActiveVoice] = []
         self._scheduled = {}  # chave (compasso, beat) -> (timestamp, midi, velocidade, duração)
@@ -161,6 +162,11 @@ class BassSynthesizer:
         with self._lock:
             self._scheduled.clear()
 
+    def stop_voices(self) -> None:
+        """Encerra vozes ativas ao trocar para um padrão de uma nota por vez."""
+        with self._lock:
+            self._voices.clear()
+
     def schedule_note(self, key: tuple, start_time: float, midi_note: int,
                       velocity: int, duration: float, source: str = "chart",
                       confidence: float = 1.0, generation_id: int = 0,
@@ -196,9 +202,10 @@ class BassSynthesizer:
         )
 
         with self._lock:
-            # Monofonia com corte suave da nota anterior (estilo contrabaixo)
-            # Mantém no máximo 2 vozes simultâneas durante transições rápidas
-            if len(self._voices) >= 2:
+            # No modo Fundamentais, nenhum ataque compartilha a voz anterior.
+            if self.strict_mono:
+                self._voices.clear()
+            elif len(self._voices) >= 2:
                 self._voices = self._voices[-1:]
             self._voices.append(voice)
 
@@ -213,31 +220,61 @@ class BassSynthesizer:
         mono_mix = np.zeros(frames, dtype=np.float32)
 
         with self._lock:
-            active_voices = []
-            for voice in self._voices:
-                mono_mix += voice.render(frames)
-                if not voice.is_finished:
-                    active_voices.append(voice)
-            if current_pos > 0 or self._scheduled:
+            if self.strict_mono:
                 end_pos = current_pos + frames / sample_rate
                 due = sorted(((key, item) for key, item in self._scheduled.items()
                               if item.scheduled_time < end_pos),
                              key=lambda pair: pair[1].scheduled_time)
+                voices = self._voices
+                cursor = 0
                 for key, event in due:
                     del self._scheduled[key]
-                    start, midi, velocity, duration = (event.scheduled_time, event.midi_note,
-                                                       event.velocity, event.duration)
-                    # Evento vencido não entra no bloco e nunca é disparado em rajada.
-                    if start < current_pos - 0.035:
+                    if event.scheduled_time < current_pos - .035:
                         continue
-                    offset = max(0, round((start - current_pos) * sample_rate))
+                    offset = max(0, round((event.scheduled_time - current_pos) * sample_rate))
                     if offset >= frames:
                         continue
-                    voice = ActiveVoice(midi_to_hz(midi), velocity, duration, sample_rate)
-                    mono_mix[offset:] += voice.render(frames - offset)
+                    if offset > cursor:
+                        segment = np.zeros(offset - cursor, dtype=np.float32)
+                        for voice in voices:
+                            segment += voice.render(offset - cursor)
+                        # Saída curta da voz antiga evita clique no corte.
+                        fade = min(len(segment), max(1, int(.004 * sample_rate)))
+                        segment[-fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)
+                        mono_mix[cursor:offset] += segment
+                    voices = [ActiveVoice(midi_to_hz(event.midi_note), event.velocity,
+                                          event.duration, sample_rate)]
+                    cursor = offset
+                if cursor < frames:
+                    for voice in voices:
+                        mono_mix[cursor:] += voice.render(frames - cursor)
+                self._voices = [voice for voice in voices if not voice.is_finished]
+            else:
+                active_voices = []
+                for voice in self._voices:
+                    mono_mix += voice.render(frames)
                     if not voice.is_finished:
                         active_voices.append(voice)
-            self._voices = active_voices
+                if current_pos > 0 or self._scheduled:
+                    end_pos = current_pos + frames / sample_rate
+                    due = sorted(((key, item) for key, item in self._scheduled.items()
+                                  if item.scheduled_time < end_pos),
+                                 key=lambda pair: pair[1].scheduled_time)
+                    for key, event in due:
+                        del self._scheduled[key]
+                        start, midi, velocity, duration = (event.scheduled_time, event.midi_note,
+                                                           event.velocity, event.duration)
+                        # Evento vencido não entra no bloco e nunca é disparado em rajada.
+                        if start < current_pos - 0.035:
+                            continue
+                        offset = max(0, round((start - current_pos) * sample_rate))
+                        if offset >= frames:
+                            continue
+                        voice = ActiveVoice(midi_to_hz(midi), velocity, duration, sample_rate)
+                        mono_mix[offset:] += voice.render(frames - offset)
+                        if not voice.is_finished:
+                            active_voices.append(voice)
+                self._voices = active_voices
 
         # Aplica volume master do baixo com proteção estrita contra saturação/clipping
         mono_mix = np.clip(mono_mix * self._volume, -1.0, 1.0)

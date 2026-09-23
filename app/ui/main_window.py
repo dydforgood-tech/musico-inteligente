@@ -29,7 +29,7 @@ from app.ui.chroma_view import ChromaView
 from app.ui.edit_history import ChartEditState, EditHistory
 from app.utils.audio_generator import generate_test_song, generate_acoustic_guitar_sample
 from app.utils.timing import LatencyTracker
-from app.instruments import BassPatternType
+from app.instruments import BassPatternType, BassNoteValue
 from app.music.theory import midi_to_hz
 from app.project.project_manager import ProjectManager, DEFAULT_PROJECT_PATH
 from app.song.song import Song
@@ -51,19 +51,28 @@ class MainWindow:
     """Janela principal da aplicação com tema escuro e dashboard de contexto musical."""
 
     BASS_PATTERNS = [
+        "FUNDAMENTAIS",
         "AUTO",
-        "ROOT",
         "ROOT + FIFTH",
         "ROOT + FIFTH + OCTAVE",
         "SUSTAINED"
     ]
 
     PATTERN_MAP = {
+        "FUNDAMENTAIS": BassPatternType.FUNDAMENTALS,
         "AUTO": BassPatternType.AUTO,
         "ROOT": BassPatternType.ROOT,
         "ROOT + FIFTH": BassPatternType.ROOT_FIFTH,
         "ROOT + FIFTH + OCTAVE": BassPatternType.ROOT_FIFTH_OCTAVE,
         "SUSTAINED": BassPatternType.SUSTAINED,
+    }
+
+    BASS_NOTE_VALUES = {
+        "Semibreve — a cada 4 tempos": BassNoteValue.WHOLE,
+        "Mínima — a cada 2 tempos": BassNoteValue.HALF,
+        "Semínima — a cada tempo": BassNoteValue.QUARTER,
+        "Colcheia — 2x por tempo": BassNoteValue.EIGHTH,
+        "Semicolcheia — 4x por tempo": BassNoteValue.SIXTEENTH,
     }
 
     def __init__(self, root: tk.Tk, project_file_path: Optional[str] = None):
@@ -76,6 +85,8 @@ class MainWindow:
         # Motor de Áudio e Analisador com Contexto e Memória Musical
         self.player = AudioPlayer()
         self.analyzer = AudioAnalyzer()
+        self.analyzer.bass_player.pattern = BassPatternType.FUNDAMENTALS
+        self.analyzer.bass_player.note_value = BassNoteValue.HALF
         self._tempo_results = queue.SimpleQueue()
         self._audio_generation = 0
         self._high_res_active = False  # modo de alta resolução harmônica (ligado no play-along)
@@ -654,7 +665,7 @@ class MainWindow:
             width=22,
             font=("Segoe UI", 8)
         )
-        self.combo_bass_pattern.set("AUTO")
+        self.combo_bass_pattern.set("FUNDAMENTAIS")
         self.combo_bass_pattern.pack(side="left", padx=(0, 14))
         self.combo_bass_pattern.bind("<<ComboboxSelected>>", self._on_bass_pattern_changed)
 
@@ -695,6 +706,19 @@ class MainWindow:
         )
         self.btn_bass_debug_toggle.pack(side="right")
 
+        rhythm_bar = tk.Frame(self.bass_container, bg="#181d26")
+        rhythm_bar.pack(fill="x", pady=(0, 5))
+        tk.Label(rhythm_bar, text="Repetição da tônica:", bg="#181d26", fg="#8c9ba5",
+                 font=("Segoe UI", 8, "bold")).pack(side="left", padx=(0, 6))
+        self.combo_bass_note_value = ttk.Combobox(
+            rhythm_bar, values=list(self.BASS_NOTE_VALUES), state="readonly",
+            width=29, font=("Segoe UI", 8))
+        self.combo_bass_note_value.set("Mínima — a cada 2 tempos")
+        self.combo_bass_note_value.pack(side="left", padx=(0, 12))
+        self.combo_bass_note_value.bind("<<ComboboxSelected>>", self._on_bass_note_value_changed)
+        tk.Label(rhythm_bar, text="O BPM e a batida do músico definem os instantes.",
+                 bg="#181d26", fg="#8c9ba5", font=("Segoe UI", 8)).pack(side="left")
+
         # -------------------------------------------------------------
         # 2. Quatro Cartões de Métricas do Baixista
         # -------------------------------------------------------------
@@ -724,7 +748,7 @@ class MainWindow:
         c3 = tk.Frame(cards_frame, bg="#141820", bd=1, relief="solid", padx=8, pady=4)
         c3.grid(row=0, column=2, sticky="nsew", padx=2)
         tk.Label(c3, text="PADRÃO EM EXECUÇÃO", bg="#141820", fg="#00d2ff", font=("Segoe UI", 7, "bold")).pack(anchor="w")
-        self.lbl_bass_pattern_active = tk.Label(c3, text="AUTO", bg="#141820", fg="#ffffff", font=("Segoe UI", 11, "bold"))
+        self.lbl_bass_pattern_active = tk.Label(c3, text="FUNDAMENTAIS", bg="#141820", fg="#ffffff", font=("Segoe UI", 11, "bold"))
         self.lbl_bass_pattern_active.pack(pady=2)
         self.lbl_bass_sub_pattern = tk.Label(c3, text="Adaptativo às mudanças", bg="#141820", fg="#8c9ba5", font=("Segoe UI", 7))
         self.lbl_bass_sub_pattern.pack()
@@ -1336,9 +1360,11 @@ class MainWindow:
                         freq = midi_to_hz(cur_ev.midi_note) if cur_ev.midi_note > 0 else 0.0
                         self.lbl_bass_freq.config(text=f"MIDI {cur_ev.midi_note}  |  {freq:.1f} Hz  |  Vel: {cur_ev.velocity}")
                         self.lbl_bass_reason.config(text=cur_ev.reason, fg="#ffffff")
-                        pat_name = cur_dec.pattern_type.value.upper() if cur_dec else bass.pattern.value.upper()
+                        pat_name = ("FUNDAMENTAIS" if bass.pattern == BassPatternType.FUNDAMENTALS else
+                                    cur_dec.pattern_type.value.upper() if cur_dec else bass.pattern.value.upper())
                         self.lbl_bass_pattern_active.config(text=pat_name, fg="#00d2ff")
-                        self.lbl_bass_sub_pattern.config(text=f"Compasso {cur_ev.bar}  |  Tempo {cur_ev.beat} / 4")
+                        self.lbl_bass_sub_pattern.config(
+                            text=f"{self.combo_bass_note_value.get()}  |  Comp. {cur_ev.bar}")
 
                         pred_note, pred_timing = bass.get_prediction(current_bar=ctx.bar, current_beat=ctx.beat)
                         self.lbl_bass_next_note.config(text=pred_note, fg="#ffd166")
@@ -1554,6 +1580,11 @@ class MainWindow:
         self.analyzer.bass_player.pattern = p
         self.lbl_status_msg.config(text=f"Padrão rítmico do baixo alterado para: {val}")
 
+    def _on_bass_note_value_changed(self, event=None) -> None:
+        label = self.combo_bass_note_value.get()
+        self.analyzer.bass_player.note_value = self.BASS_NOTE_VALUES[label]
+        self.lbl_status_msg.config(text=f"Repetição da tônica: {label}")
+
     def _on_bass_volume_changed(self, val) -> None:
         try:
             vol_val = float(val)
@@ -1706,6 +1737,8 @@ class MainWindow:
 
         self.listbox_setlist = tk.Listbox(
             list_frame,
+            selectmode="extended",
+            exportselection=False,
             bg="#0d1015",
             fg="#ffffff",
             selectbackground="#0077b6",
@@ -1721,6 +1754,7 @@ class MainWindow:
         self.listbox_setlist.pack(side="left", fill="both", expand=True)
         sb_setlist.pack(side="right", fill="y")
         self.listbox_setlist.bind("<<ListboxSelect>>", self._on_setlist_select)
+        self.listbox_setlist.bind("<Delete>", self._on_delete_selected_songs)
 
         # Botões de Navegação no Setlist
         nav_box = tk.Frame(left_pane, bg="#141820")
@@ -1753,6 +1787,11 @@ class MainWindow:
         btn_save_proj = tk.Button(act_box, text="💾 Salvar", bg="#1a2d42", fg="#00d2ff", relief="flat",
                                   font=("Segoe UI", 8, "bold"), command=self._on_save_project)
         btn_save_proj.pack(side="left", fill="x", expand=True, padx=(2, 0))
+
+        btn_remove_song = tk.Button(
+            act_box, text="🗑 Remover", bg="#3a1c1c", fg="#ff9b94", relief="flat",
+            font=("Segoe UI", 8, "bold"), command=self._on_delete_selected_songs)
+        btn_remove_song.pack(side="left", fill="x", expand=True, padx=(4, 0))
 
         # Card de Prontidão da Banda Virtual
         band_card = tk.Frame(left_pane, bg="#181d26", bd=1, relief="solid", padx=6, pady=4)
@@ -2102,17 +2141,64 @@ class MainWindow:
         if active_song:
             self.lbl_playalong_song_title.config(text=f"{active_song.title} — {active_song.artist} ({active_song.key})")
             self._render_chart_text(active_song)
+        else:
+            self.lbl_playalong_song_title.config(text="Nenhuma música na setlist")
+            self.text_chart_view.delete("1.0", "end")
 
     def _on_setlist_select(self, event=None) -> None:
         """Manipula seleção manual de música na listbox."""
         sel = self.listbox_setlist.curselection()
-        if not sel:
+        if len(sel) != 1:
             return
         idx = sel[0]
         setlist = self.project_manager.project.get_active_setlist()
         if 0 <= idx < len(setlist.songs):
             target_song = setlist.songs[idx]
-            self._switch_to_song(target_song)
+            if (self.project_manager.active_session is None or
+                    self.project_manager.active_session.song.id != target_song.id):
+                self._switch_to_song(target_song)
+
+    def _on_delete_selected_songs(self, event=None):
+        """Delete remove da setlist as entradas marcadas, preservando os arquivos."""
+        setlist = self.project_manager.project.get_active_setlist()
+        indices = sorted(set(self.listbox_setlist.curselection()))
+        selected = [setlist.songs[index] for index in indices
+                    if 0 <= index < len(setlist.songs)]
+        if not selected:
+            return "break"
+        selected_ids = [song.id for song in selected]
+        active = self.project_manager.active_session
+        removing_active = active is not None and active.song.id in selected_ids
+        if removing_active:
+            self.player.stop()
+            self.virtual_players.reset_all()
+        try:
+            removed = self.project_manager.remove_songs_from_active_setlist(selected_ids)
+        except Exception as exc:
+            messagebox.showerror("Erro ao remover música", str(exc), parent=self.root)
+            return "break"
+        next_song = setlist.get_active_song()
+        if removing_active and next_song is not None:
+            self._switch_to_song(next_song)
+        elif removing_active:
+            self.player.unload_source()
+            self._current_source = None
+            self.analyzer.reset_musical_history()
+            self.waveform_view.clear()
+            self.seek_var.set(0.0)
+            self.seek_slider.config(to=0.0)
+            self.lbl_time_cur.config(text="00:00")
+            self.lbl_time_total.config(text="00:00")
+            self.lbl_file_name.config(text="Nenhum áudio carregado")
+            self.lbl_meta_details.config(text="Importe uma música para começar.")
+            self._update_transport_state(PlaybackState.STOPPED)
+            self._has_unsaved_chart_edits = False
+            self._refresh_setlist_listbox()
+        else:
+            self._refresh_setlist_listbox()
+        self.lbl_status_msg.config(
+            text=f"{len(removed)} música(s) removida(s) da setlist. Arquivos preservados.")
+        return "break"
 
     def _switch_to_song(self, song: Song) -> None:
         """Executa a transição hermética para uma nova música."""

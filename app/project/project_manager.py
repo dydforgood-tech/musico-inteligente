@@ -103,6 +103,35 @@ class ProjectManager:
             return self.open_song(song, mode=mode)
         return None
 
+    def remove_songs_from_active_setlist(self, song_ids: List[str]) -> List[Song]:
+        """Remove entradas selecionadas da setlist sem apagar seus arquivos de origem."""
+        active_set = self._project.get_active_setlist()
+        selected = set(song_ids)
+        removed = [song for song in active_set.songs if song.id in selected]
+        if not removed:
+            return []
+        old_active_id = active_set.active_song_id
+        old_songs = list(active_set.songs)
+        old_active_index = next((index for index, song in enumerate(active_set.songs)
+                                 if song.id == old_active_id), 0)
+        active_set.songs = [song for song in active_set.songs if song.id not in selected]
+        if old_active_id in selected:
+            next_index = min(old_active_index, len(active_set.songs) - 1)
+            active_set.active_song_id = (active_set.songs[next_index].id
+                                         if active_set.songs else None)
+        if self._project.settings.auto_save:
+            try:
+                self.save_project()
+            except Exception:
+                active_set.songs = old_songs
+                active_set.active_song_id = old_active_id
+                raise
+        if (self._active_session is not None and
+                self._active_session.song.id in selected):
+            self._active_session.close()
+            self._active_session = None
+        return removed
+
     # ============================================================
     # Importação Flexível de Músicas
     # ============================================================

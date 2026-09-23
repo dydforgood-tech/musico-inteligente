@@ -143,7 +143,8 @@ class BassDecisionEngine:
                 quality = "major"
 
         # Respeitar inversão: se o acorde possui baixo específico (ex: G/B), o baixo toca o B
-        if context.inversion != "root" and context.bass_note in PITCH_CLASSES:
+        if (pattern_override != BassPatternType.FUNDAMENTALS and
+                context.inversion != "root" and context.bass_note in PITCH_CLASSES):
             effective_root = context.bass_note
             reason = f"Inversão do acorde (Baixo em {context.bass_note})"
         else:

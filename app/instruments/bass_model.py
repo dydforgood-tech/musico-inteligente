@@ -9,10 +9,24 @@ import numpy as np
 class BassPatternType(Enum):
     """Padrões rítmicos disponíveis para o Baixista Virtual."""
     AUTO = "AUTO"                               # Adaptação automática baseada em andamento e harmonia
+    FUNDAMENTALS = "FUNDAMENTALS"               # Apenas tônicas, na subdivisão escolhida pelo usuário
     ROOT = "ROOT"                               # Apenas fundamental nos tempos principais
     ROOT_FIFTH = "ROOT + FIFTH"                 # Fundamental e quinta alternadas (clássico pop/rock)
     ROOT_FIFTH_OCTAVE = "ROOT + FIFTH + OCTAVE" # Fundamental, quinta e oitava
     SUSTAINED = "SUSTAINED"                     # Fundamental sustentada ao longo do compasso/acorde
+
+
+class BassNoteValue(Enum):
+    """Distância entre ataques, expressa em tempos de semínima."""
+    WHOLE = 4.0
+    HALF = 2.0
+    QUARTER = 1.0
+    EIGHTH = 0.5
+    SIXTEENTH = 0.25
+
+    @property
+    def beats(self) -> float:
+        return float(self.value)
 
 
 @dataclass

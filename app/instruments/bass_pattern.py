@@ -9,7 +9,7 @@ Responsável por estruturar a sequência de notas a serem tocadas a cada tempo d
 """
 
 from typing import List, Tuple
-from app.instruments.bass_model import BassDecision, BassPatternType
+from app.instruments.bass_model import BassDecision, BassPatternType, BassNoteValue
 from app.music.constants import MIN_BASS_CHORD_CONFIDENCE
 
 
@@ -23,8 +23,9 @@ class BassPatternGenerator:
         self,
         decision: BassDecision,
         beats: int = 4,
-        chord_duration_beats: float = 4.0
-    ) -> List[Tuple[int, str, int, str]]:
+        chord_duration_beats: float = 4.0,
+        note_value: BassNoteValue = BassNoteValue.QUARTER,
+    ) -> List[Tuple[float, str, int, str]]:
         """Gera lista de tuplas (beat, note_name, midi_note, reason) para o compasso/acorde.
         
         Exemplo de retorno para C em ROOT_FIFTH (4 beats):
@@ -53,10 +54,13 @@ class BassPatternGenerator:
         # -------------------------------------------------------------
         # 1. Padrão ROOT (Apenas Fundamental)
         # -------------------------------------------------------------
-        if pat_type == BassPatternType.ROOT:
+        if pat_type in (BassPatternType.ROOT, BassPatternType.FUNDAMENTALS):
             events = []
-            for b in range(1, effective_beats + 1):
-                events.append((b, decision.root_note, decision.root_midi, "Fundamental"))
+            position = 1.0
+            limit = 1.0 + min(float(beats), max(0.0, chord_duration_beats))
+            while position < limit - 1e-9:
+                events.append((position, decision.root_note, decision.root_midi, "Fundamental"))
+                position += note_value.beats
             return events
 
         # -------------------------------------------------------------
